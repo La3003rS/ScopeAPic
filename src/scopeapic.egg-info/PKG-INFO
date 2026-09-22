@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: scopeapic
+Version: 0.2.0
+Summary: Photo intelligence and deep metadata analysis.
+Requires-Python: >=3.13
+Requires-Dist: fastapi
+Requires-Dist: uvicorn
+Requires-Dist: python-multipart
+Requires-Dist: pillow
+Requires-Dist: pillow-heif
+Requires-Dist: pydantic

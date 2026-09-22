@@ -1,0 +1,13 @@
+README.md
+pyproject.toml
+src/scopeapic/__init__.py
+src/scopeapic/app.py
+src/scopeapic/cli.py
+src/scopeapic/fujifilm.py
+src/scopeapic/metadata.py
+src/scopeapic/models.py
+src/scopeapic.egg-info/PKG-INFO
+src/scopeapic.egg-info/SOURCES.txt
+src/scopeapic.egg-info/dependency_links.txt
+src/scopeapic.egg-info/requires.txt
+src/scopeapic.egg-info/top_level.txt
