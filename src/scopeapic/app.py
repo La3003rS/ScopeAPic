@@ -1,11 +1,13 @@
+from __future__ import annotations
+
+import io
+import tempfile
 from pathlib import Path
-from io import BytesIO
 
-from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import HTMLResponse, Response
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-
-from PIL import Image
+from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
 
 from .metadata import analyze_photo
@@ -13,70 +15,168 @@ from .metadata import analyze_photo
 
 register_heif_opener()
 
+BASE_DIR = Path(__file__).resolve().parent
+TEMPLATE_PATH = BASE_DIR / "templates" / "index.html"
+STATIC_DIR = BASE_DIR / "static"
 
 app = FastAPI(
     title="ScopeAPic",
-    description="Photo intelligence and deep metadata analysis.",
-    version="0.2.0",
+    version="0.3.0",
 )
-
-
-BASE_DIR = Path(__file__).resolve().parent
-
 
 app.mount(
     "/static",
-    StaticFiles(directory=BASE_DIR / "static"),
+    StaticFiles(directory=STATIC_DIR),
     name="static",
 )
 
 
-@app.get("/", response_class=HTMLResponse)
-async def home():
-    return (
-        BASE_DIR / "templates" / "index.html"
-    ).read_text(encoding="utf-8")
+ALLOWED_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".tif",
+    ".tiff",
+    ".heic",
+    ".heif",
+}
+
+
+def validate_upload(filename: str | None) -> None:
+    if not filename:
+        raise HTTPException(
+            status_code=400,
+            detail="No filename supplied.",
+        )
+
+    extension = Path(filename).suffix.lower()
+
+    if extension not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Unsupported image format. "
+                "Supported: JPG, PNG, WebP, TIFF, HEIC and HEIF."
+            ),
+        )
+
+
+@app.get("/")
+async def index() -> Response:
+    return Response(
+        TEMPLATE_PATH.read_text(encoding="utf-8"),
+        media_type="text/html",
+    )
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
 
 
 @app.post("/api/analyze")
-async def analyze(file: UploadFile = File(...)):
+async def api_analyze(file: UploadFile = File(...)):
+    validate_upload(file.filename)
 
-    image_data = await file.read()
+    data = await file.read()
 
-    return analyze_photo(
-        image_data=image_data,
-        filename=file.filename or "unknown",
-        content_type=file.content_type,
-    )
+    if not data:
+        raise HTTPException(
+            status_code=400,
+            detail="The uploaded file is empty.",
+        )
+
+    suffix = Path(file.filename or "").suffix.lower()
+
+    temporary_path: Path | None = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            suffix=suffix,
+            delete=False,
+        ) as handle:
+            handle.write(data)
+            temporary_path = Path(handle.name)
+
+        result = analyze_photo(temporary_path)
+
+        # Restore the user's filename because the analysis file is temporary.
+        result["file"]["name"] = file.filename
+
+        return JSONResponse(result)
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unable to analyze image: {exc}",
+        ) from exc
+
+    finally:
+        if temporary_path:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 @app.post("/api/preview")
-async def preview(file: UploadFile = File(...)):
+async def api_preview(file: UploadFile = File(...)):
+    validate_upload(file.filename)
 
-    image_data = await file.read()
+    data = await file.read()
 
-    image = Image.open(
-        BytesIO(image_data)
-    )
+    if not data:
+        raise HTTPException(
+            status_code=400,
+            detail="The uploaded file is empty.",
+        )
 
-    image.thumbnail(
-        (2400, 2400),
-        Image.Resampling.LANCZOS,
-    )
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            image = ImageOps.exif_transpose(image)
 
-    if image.mode not in ("RGB", "L"):
-        image = image.convert("RGB")
+            if image.mode not in {"RGB", "RGBA"}:
+                image = image.convert("RGB")
 
-    output = BytesIO()
+            image.thumbnail(
+                (1800, 1200),
+                Image.Resampling.LANCZOS,
+            )
 
-    image.save(
-        output,
-        format="JPEG",
-        quality=92,
-        optimize=True,
-    )
+            output = io.BytesIO()
 
-    return Response(
-        content=output.getvalue(),
-        media_type="image/jpeg",
-    )
+            if image.mode == "RGBA":
+                background = Image.new(
+                    "RGB",
+                    image.size,
+                    "black",
+                )
+                background.paste(
+                    image,
+                    mask=image.getchannel("A"),
+                )
+                image = background
+            else:
+                image = image.convert("RGB")
+
+            image.save(
+                output,
+                format="JPEG",
+                quality=90,
+                optimize=True,
+            )
+
+            return Response(
+                output.getvalue(),
+                media_type="image/jpeg",
+                headers={
+                    "Cache-Control": "no-store",
+                },
+            )
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unable to create preview: {exc}",
+        ) from exc

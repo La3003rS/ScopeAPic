@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scopeapic"
-version = "0.2.0"
-description = "Photo intelligence and deep metadata analysis."
+version = "0.3.0"
+description = "Local-first photo intelligence and metadata analysis."
 requires-python = ">=3.13"
 dependencies = [
     "fastapi",

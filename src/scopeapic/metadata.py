@@ -1,123 +1,108 @@
 from __future__ import annotations
 
+import hashlib
+import math
 from fractions import Fraction
-from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 from PIL import ExifTags, Image
-from pillow_heif import register_heif_opener
 
-from .fujifilm import decode_fujifilm
+# Register HEIC/HEIF support before opening any images.
+# This is required for Pillow to expose HEIC EXIF/GPS data correctly.
+try:
+    from pillow_heif import register_heif_opener
 
-
-register_heif_opener()
+    register_heif_opener()
+except Exception:
+    # JPEG/TIFF/etc. should continue to work even if pillow-heif
+    # is unavailable.
+    pass
 
 
 TAG_NAMES = {
-    tag_id: name
-    for tag_id, name in ExifTags.TAGS.items()
+    tag: name
+    for tag, name in ExifTags.TAGS.items()
 }
 
-
 GPS_TAG_NAMES = {
-    tag_id: name
-    for tag_id, name in ExifTags.GPSTAGS.items()
+    tag: name
+    for tag, name in ExifTags.GPSTAGS.items()
 }
 
 
 def safe_value(value: Any) -> Any:
-
     if value is None:
         return None
 
     if isinstance(value, bytes):
-        try:
-            return value.decode(
-                "utf-8",
-                errors="replace",
-            )
-        except Exception:
-            return value.hex()
-
-    if isinstance(value, Fraction):
-        if value.denominator == 1:
-            return value.numerator
-
-        return float(value)
-
-    if isinstance(value, tuple):
-        return [
-            safe_value(item)
-            for item in value
-        ]
-
-    if isinstance(value, list):
-        return [
-            safe_value(item)
-            for item in value
-        ]
-
-    if isinstance(value, dict):
-        return {
-            str(key): safe_value(item)
-            for key, item in value.items()
-        }
-
-    try:
-        if hasattr(value, "item"):
-            return safe_value(value.item())
-    except Exception:
-        pass
+        if len(value) <= 64:
+            try:
+                return value.decode("utf-8", errors="replace")
+            except Exception:
+                return f"<{len(value)} bytes>"
+        return f"<{len(value)} bytes>"
 
     if isinstance(value, (str, int, float, bool)):
+        if isinstance(value, float):
+            if math.isnan(value) or math.isinf(value):
+                return None
         return value
 
-    return str(value)
+    if isinstance(value, Fraction):
+        return float(value)
+
+    if isinstance(value, (list, tuple)):
+        return [safe_value(v) for v in value]
+
+    try:
+        return float(value)
+    except Exception:
+        return str(value)
 
 
-def numeric_value(value):
-
+def numeric_value(value: Any) -> float | None:
     if value is None:
         return None
 
-    if isinstance(value, dict):
-
-        if "value" in value:
-            return numeric_value(
-                value["value"]
-            )
-
-        return None
-
     try:
+        if isinstance(value, Fraction):
+            return float(value)
+
+        if isinstance(value, (int, float)):
+            return float(value)
+
+        if isinstance(value, str):
+            return float(value.strip())
+
         return float(value)
-    except (TypeError, ValueError):
+    except Exception:
         return None
 
 
-def format_exposure_time(value):
-
+def format_exposure_time(value: Any) -> str | None:
     number = numeric_value(value)
 
     if number is None:
         return None
 
-    if number == 0:
+    if number <= 0:
         return None
 
     if number >= 1:
-        return f"{number:g} s"
+        if abs(number - round(number)) < 0.0001:
+            return f"{int(round(number))} s"
+        return f"{number:.2f} s"
 
-    reciprocal = round(1 / number)
+    denominator = round(1 / number)
 
-    if reciprocal > 1:
-        return f"1/{reciprocal} s"
+    if denominator > 0:
+        return f"1/{denominator} s"
 
-    return f"{number:g} s"
+    return f"{number:.4f} s"
 
 
-def format_aperture(value):
-
+def format_aperture(value: Any) -> str | None:
     number = numeric_value(value)
 
     if number is None:
@@ -126,608 +111,505 @@ def format_aperture(value):
     return f"f/{number:g}"
 
 
+def _tag_name(tag: Any) -> str:
+    try:
+        return TAG_NAMES.get(int(tag), f"Tag {tag}")
+    except Exception:
+        return str(tag)
+
+
+def _gps_name(tag: Any) -> str:
+    try:
+        return GPS_TAG_NAMES.get(int(tag), f"GPS {tag}")
+    except Exception:
+        return str(tag)
+
+
 def collect_ifd(
+    ifd: Any,
+    *,
     section: str,
-    values: dict,
-    tag_names: dict | None = None,
-):
+    records: list[dict[str, Any]],
+) -> None:
+    if not ifd:
+        return
 
-    tag_names = tag_names or TAG_NAMES
+    try:
+        iterator = ifd.items()
+    except Exception:
+        return
 
-    records = []
-
-    for tag_id, value in values.items():
-
-        name = tag_names.get(
-            tag_id,
-            f"UnknownTag_{tag_id}",
-        )
+    for tag, value in iterator:
+        name = _gps_name(tag) if section == "GPS" else _tag_name(tag)
 
         records.append(
             {
                 "section": section,
-                "tag_id": tag_id,
+                "tag": int(tag) if isinstance(tag, int) else str(tag),
                 "name": name,
                 "value": safe_value(value),
             }
         )
 
-    return records
 
+def _get_gps_ifd(exif: Any) -> Any:
+    """
+    Read the EXIF GPS IFD robustly.
 
-def collect_all_ifds(image: Image.Image):
+    Some HEIC files return an offset from:
+        exif.get(34853)
 
-    records = []
+    while the actual GPS dictionary is returned by:
+        exif.get_ifd(34853)
+
+    Therefore we must use get_ifd() rather than treating the
+    value returned by exif.get(34853) as the GPS dictionary.
+    """
+    gps_tag = 34853
 
     try:
-        exif = image.getexif()
-    except Exception:
-        exif = None
-
-    if not exif:
-        return records
-
-    try:
-        records.extend(
-            collect_ifd(
-                "IFD0",
-                dict(exif),
-            )
-        )
+        return exif.get_ifd(gps_tag)
     except Exception:
         pass
 
-    for ifd_name, ifd_type in [
-        ("EXIF", ExifTags.IFD.Exif),
-        ("GPS", ExifTags.IFD.GPSInfo),
-        ("MAKERNOTE", ExifTags.IFD.MakerNote),
-        ("INTEROP", ExifTags.IFD.Interop),
-        ("IFD1", ExifTags.IFD.IFD1),
-    ]:
+    try:
+        gps_ifd_tag = ExifTags.IFD.GPS
+        return exif.get_ifd(gps_ifd_tag)
+    except Exception:
+        return None
 
-        try:
 
-            values = exif.get_ifd(
-                ifd_type
-            )
+def collect_all_ifds(exif: Any) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
 
-            if not values:
-                continue
+    try:
+        collect_ifd(exif, section="IFD0", records=records)
+    except Exception:
+        pass
 
-            if ifd_name == "GPS":
-                records.extend(
-                    collect_ifd(
-                        ifd_name,
-                        dict(values),
-                        GPS_TAG_NAMES,
-                    )
-                )
-            else:
-                records.extend(
-                    collect_ifd(
-                        ifd_name,
-                        dict(values),
-                    )
-                )
+    try:
+        exif_ifd = exif.get_ifd(ExifTags.IFD.Exif)
+        collect_ifd(exif_ifd, section="EXIF", records=records)
+    except Exception:
+        pass
 
-        except Exception:
-            continue
+    # GPS is handled explicitly because HEIC files can expose
+    # tag 34853 as an offset while get_ifd(34853) contains
+    # the actual GPS dictionary.
+    try:
+        gps_ifd = _get_gps_ifd(exif)
+        collect_ifd(gps_ifd, section="GPS", records=records)
+    except Exception:
+        pass
+
+    try:
+        interop_ifd = exif.get_ifd(ExifTags.IFD.Interop)
+        collect_ifd(interop_ifd, section="Interop", records=records)
+    except Exception:
+        pass
+
+    try:
+        maker_ifd = exif.get_ifd(ExifTags.IFD.MakerNote)
+        collect_ifd(maker_ifd, section="MakerNote", records=records)
+    except Exception:
+        pass
 
     return records
 
 
-def find(
-    records,
-    name,
-    section=None,
-):
-
-    for record in records:
-
-        if record["name"] != name:
-            continue
-
-        if (
-            section is not None
-            and record["section"] != section
-        ):
-            continue
-
-        return record["value"]
-
-    return None
-
-
 def find_record(
-    records,
-    name,
-    section=None,
-):
+    records: list[dict[str, Any]],
+    *names: str,
+) -> dict[str, Any] | None:
+    wanted = {name.lower() for name in names}
 
     for record in records:
+        name = str(record.get("name", "")).lower()
 
-        if record["name"] != name:
-            continue
-
-        if (
-            section is not None
-            and record["section"] != section
-        ):
-            continue
-
-        return record
+        if name in wanted:
+            return record
 
     return None
 
 
-def gps_to_decimal(
-    coordinates,
-    reference,
-):
+def find(
+    records: list[dict[str, Any]],
+    *names: str,
+) -> Any:
+    record = find_record(records, *names)
 
-    if not coordinates:
+    if not record:
+        return None
+
+    return record.get("value")
+
+
+def gps_to_decimal(value: Any, reference: Any) -> float | None:
+    if value is None:
         return None
 
     try:
+        parts = list(value)
 
-        parts = [
-            numeric_value(item)
-            for item in coordinates
-        ]
+        numbers = []
 
-        if any(
-            item is None
-            for item in parts
-        ):
+        for part in parts[:3]:
+            number = numeric_value(part)
+
+            if number is None:
+                return None
+
+            numbers.append(number)
+
+        if len(numbers) != 3:
             return None
 
-        degrees, minutes, seconds = parts
+        degrees, minutes, seconds = numbers
 
-        decimal = (
-            degrees
-            + minutes / 60
-            + seconds / 3600
-        )
+        decimal = degrees + minutes / 60 + seconds / 3600
 
-        if reference in ("S", "W"):
+        ref = str(reference or "").upper().strip()
+
+        if ref in {"S", "W"}:
             decimal *= -1
 
-        return decimal
+        return round(decimal, 7)
 
     except Exception:
         return None
 
 
-def gps_coordinates(records):
+def gps_coordinates(records: list[dict[str, Any]]) -> tuple[float, float] | None:
+    latitude = find(records, "GPSLatitude")
+    latitude_ref = find(records, "GPSLatitudeRef")
+    longitude = find(records, "GPSLongitude")
+    longitude_ref = find(records, "GPSLongitudeRef")
 
-    latitude = find(
-        records,
-        "GPSLatitude",
-        "GPS",
-    )
-
-    latitude_ref = find(
-        records,
-        "GPSLatitudeRef",
-        "GPS",
-    )
-
-    longitude = find(
-        records,
-        "GPSLongitude",
-        "GPS",
-    )
-
-    longitude_ref = find(
-        records,
-        "GPSLongitudeRef",
-        "GPS",
-    )
-
-    if (
-        latitude is None
-        or longitude is None
-    ):
-        return None
-
-    lat = gps_to_decimal(
-        latitude,
-        str(latitude_ref or ""),
-    )
-
-    lon = gps_to_decimal(
-        longitude,
-        str(longitude_ref or ""),
-    )
+    lat = gps_to_decimal(latitude, latitude_ref)
+    lon = gps_to_decimal(longitude, longitude_ref)
 
     if lat is None or lon is None:
         return None
 
-    altitude = find(
-        records,
-        "GPSAltitude",
-        "GPS",
-    )
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None
 
-    altitude_ref = find(
-        records,
-        "GPSAltitudeRef",
-        "GPS",
-    )
+    # Never allow an empty/invalid GPS position to become
+    # 0.000000, 0.000000.
+    if abs(lat) < 0.0000001 and abs(lon) < 0.0000001:
+        return None
 
-    altitude_value = numeric_value(
-        altitude
-    )
+    return lat, lon
 
-    if (
-        altitude_value is not None
-        and altitude_ref in (1, "1", b"\x01")
-    ):
-        altitude_value *= -1
 
-    direction = find(
-        records,
-        "GPSImgDirection",
-        "GPS",
-    )
+def _hash_file(path: Path) -> str:
+    digest = hashlib.sha256()
 
-    direction_value = numeric_value(
-        direction
-    )
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+
+    return digest.hexdigest()
+
+
+def image_file_info(path: Path, image: Image.Image) -> dict[str, Any]:
+    stat = path.stat()
 
     return {
-        "latitude": lat,
-        "longitude": lon,
-        "altitude": altitude_value,
-        "direction": direction_value,
-        "latitude_raw": safe_value(
-            latitude
-        ),
-        "longitude_raw": safe_value(
-            longitude
-        ),
-    }
-
-
-def image_file_info(
-    image,
-    image_data,
-    filename,
-    content_type,
-):
-
-    width, height = image.size
-
-    megapixels = (
-        width * height
-    ) / 1_000_000
-
-    aspect_ratio = None
-
-    if height:
-        ratio = width / height
-
-        aspect_ratio = (
-            f"{ratio:.2f}:1"
-        )
-
-    format_name = (
-        image.format
-        or PathLikeFormat(filename)
-    )
-
-    return {
-        "filename": filename,
-        "content_type": content_type,
-        "format": format_name,
-        "width": width,
-        "height": height,
-        "megapixels": round(
-            megapixels,
-            2,
-        ),
-        "aspect_ratio": aspect_ratio,
-        "size_bytes": len(image_data),
+        "name": path.name,
+        "extension": path.suffix.lower().lstrip(".").upper() or "UNKNOWN",
+        "size_bytes": stat.st_size,
+        "size_human": _human_size(stat.st_size),
+        "sha256": _hash_file(path),
+        "modified": stat.st_mtime,
+        "format": image.format or path.suffix.upper().lstrip("."),
         "mode": image.mode,
     }
 
 
-def PathLikeFormat(filename):
+def _human_size(size: int) -> str:
+    units = ["B", "KB", "MB", "GB", "TB"]
 
-    if "." not in filename:
-        return "Unknown"
+    value = float(size)
 
-    extension = (
-        filename
-        .rsplit(".", 1)[-1]
-        .upper()
-    )
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(value)} B"
+            return f"{value:.1f} {unit}"
 
-    return extension
+        value /= 1024
+
+    return f"{size} B"
 
 
-def analyze_photo(
-    image_data: bytes,
-    filename: str,
-    content_type: str | None,
-):
-
-    image = Image.open(
-        BytesIO(image_data)
-    )
-
-    records = collect_all_ifds(
-        image
-    )
-
-    fujifilm_records = []
-
-    camera_make = find(
-        records,
-        "Make",
-    )
-
-    camera_model = find(
-        records,
-        "Model",
-    )
-
-    if (
-        camera_make
-        and "FUJIFILM"
-        in str(camera_make).upper()
-    ):
-
-        fujifilm_records = (
-            decode_fujifilm(records)
-        )
-
-    camera_software = find(
-        records,
-        "Software",
-    )
-
-    lens_model = find(
-        records,
-        "LensModel",
-    )
-
-    lens_make = find(
-        records,
-        "LensMake",
-    )
-
-    iso = find(
-        records,
-        "ISOSpeedRatings",
-    )
-
-    shutter = find(
-        records,
-        "ExposureTime",
-    )
-
-    aperture = find(
-        records,
-        "FNumber",
-    )
-
-    focal_length = find(
-        records,
-        "FocalLength",
-    )
-
-    focal_35 = find(
-        records,
-        "FocalLengthIn35mmFilm",
-    )
-
-    exposure_bias = find(
-        records,
-        "ExposureBiasValue",
-    )
-
-    metering = find(
-        records,
-        "MeteringMode",
-    )
-
-    flash = find(
-        records,
-        "Flash",
-    )
-
-    white_balance = find(
-        records,
-        "WhiteBalance",
-    )
-
-    exposure_program = find(
-        records,
-        "ExposureProgram",
-    )
-
-    exposure_mode = find(
-        records,
-        "ExposureMode",
-    )
-
-    max_aperture = find(
-        records,
-        "MaxApertureValue",
-    )
-
-    date_original = find(
+def _date_value(records: list[dict[str, Any]]) -> str | None:
+    return find(
         records,
         "DateTimeOriginal",
+        "DateTimeDigitized",
+        "DateTime",
     )
 
-    offset_original = find(
-        records,
-        "OffsetTimeOriginal",
-    )
 
-    subsec_original = find(
-        records,
-        "SubsecTimeOriginal",
-    )
+def _camera_value(records: list[dict[str, Any]], *names: str) -> Any:
+    return find(records, *names)
 
-    artist = find(
-        records,
-        "Artist",
-    )
 
-    copyright_value = find(
-        records,
-        "Copyright",
-    )
+def analyze_photo(path: str | Path) -> dict[str, Any]:
+    path = Path(path)
 
-    body_serial = find(
-        records,
-        "BodySerialNumber",
-    )
+    with Image.open(path) as image:
+        image_format = image.format
+        width, height = image.size
+        mode = image.mode
 
-    lens_serial = find(
-        records,
-        "LensSerialNumber",
-    )
+        exif = image.getexif()
 
-    orientation = find(
-        records,
-        "Orientation",
-    )
+        records = collect_all_ifds(exif)
 
-    color_space = find(
-        records,
-        "ColorSpace",
-    )
+        make = _camera_value(
+            records,
+            "Make",
+            "Manufacturer",
+        )
 
-    gps = gps_coordinates(
-        records
-    )
+        model = _camera_value(
+            records,
+            "Model",
+            "CameraModelName",
+        )
 
-    file_info = image_file_info(
-        image,
-        image_data,
-        filename,
-        content_type,
-    )
+        lens = _camera_value(
+            records,
+            "LensModel",
+            "Lens",
+            "LensInfo",
+        )
 
-    privacy = {
-        "gps_present": gps is not None,
-        "camera_serial_present": bool(
-            body_serial
-        ),
-        "lens_serial_present": bool(
-            lens_serial
-        ),
-        "artist_present": bool(
-            artist
-        ),
-        "copyright_present": bool(
-            copyright_value
-        ),
-        "software_present": bool(
-            camera_software
-        ),
-    }
+        software = _camera_value(
+            records,
+            "Software",
+        )
 
-    return {
-        "file": file_info,
+        date_original = _camera_value(
+            records,
+            "DateTimeOriginal",
+            "DateTimeDigitized",
+        )
 
-        "camera": {
-            "make": camera_make,
-            "model": camera_model,
-            "lens": lens_model,
-            "lens_make": lens_make,
-            "software": camera_software,
-        },
+        date_general = _camera_value(
+            records,
+            "DateTime",
+        )
 
-        "exposure": {
-            "iso": safe_value(iso),
-            "shutter_speed": format_exposure_time(
-                shutter
-            ),
-            "aperture": format_aperture(
-                aperture
-            ),
-            "focal_length": safe_value(
-                focal_length
-            ),
-            "focal_length_35mm": safe_value(
-                focal_35
-            ),
-            "exposure_bias": safe_value(
-                exposure_bias
-            ),
-            "metering_mode": safe_value(
-                metering
-            ),
-            "flash": safe_value(
-                flash
-            ),
-            "white_balance": safe_value(
-                white_balance
-            ),
-            "exposure_program": safe_value(
-                exposure_program
-            ),
-            "exposure_mode": safe_value(
-                exposure_mode
-            ),
-            "max_aperture": format_aperture(
-                max_aperture
-            ),
-        },
+        exposure_time = _camera_value(
+            records,
+            "ExposureTime",
+            "ShutterSpeedValue",
+        )
 
-        "capture": {
-            "date_time_original": safe_value(
-                date_original
-            ),
-            "offset_time_original": safe_value(
-                offset_original
-            ),
-            "subsec_time_original": safe_value(
-                subsec_original
-            ),
-        },
+        aperture = _camera_value(
+            records,
+            "FNumber",
+            "ApertureValue",
+        )
 
-        "location": gps,
-        "gps": gps,
+        iso = _camera_value(
+            records,
+            "ISOSpeedRatings",
+            "PhotographicSensitivity",
+        )
 
-        "privacy": privacy,
+        focal_length = _camera_value(
+            records,
+            "FocalLength",
+        )
 
-        "identifiers": {
-            "camera_serial": safe_value(
-                body_serial
-            ),
-            "lens_serial": safe_value(
-                lens_serial
-            ),
-            "artist": safe_value(
-                artist
-            ),
-            "copyright": safe_value(
-                copyright_value
-            ),
-        },
+        flash = _camera_value(
+            records,
+            "Flash",
+        )
 
-        "image": {
-            "orientation": safe_value(
-                orientation
-            ),
-            "color_space": safe_value(
-                color_space
-            ),
-        },
+        orientation = _camera_value(
+            records,
+            "Orientation",
+        )
 
-        "fujifilm": {
-            "detected": bool(
-                fujifilm_records
-            ),
-            "metadata": fujifilm_records,
-        },
+        color_space = _camera_value(
+            records,
+            "ColorSpace",
+        )
 
-        "metadata": records,
-        "metadata_count": len(records),
-    }
+        artist = _camera_value(
+            records,
+            "Artist",
+            "Author",
+        )
+
+        copyright_value = _camera_value(
+            records,
+            "Copyright",
+        )
+
+        serial = _camera_value(
+            records,
+            "BodySerialNumber",
+            "CameraSerialNumber",
+            "SerialNumber",
+        )
+
+        lens_serial = _camera_value(
+            records,
+            "LensSerialNumber",
+        )
+
+        gps = gps_coordinates(records)
+
+        privacy_items: list[dict[str, Any]] = []
+
+        if gps:
+            privacy_items.append(
+                {
+                    "type": "location",
+                    "label": "GPS location",
+                    "value": "Exact coordinates embedded",
+                }
+            )
+
+        if artist:
+            privacy_items.append(
+                {
+                    "type": "identity",
+                    "label": "Author",
+                    "value": str(artist),
+                }
+            )
+
+        if copyright_value:
+            privacy_items.append(
+                {
+                    "type": "copyright",
+                    "label": "Copyright",
+                    "value": str(copyright_value),
+                }
+            )
+
+        if serial:
+            privacy_items.append(
+                {
+                    "type": "device",
+                    "label": "Camera serial",
+                    "value": str(serial),
+                }
+            )
+
+        if lens_serial:
+            privacy_items.append(
+                {
+                    "type": "device",
+                    "label": "Lens serial",
+                    "value": str(lens_serial),
+                }
+            )
+
+        if software:
+            privacy_items.append(
+                {
+                    "type": "software",
+                    "label": "Software",
+                    "value": str(software),
+                }
+            )
+
+        # Import here to keep the decoder isolated.
+        from .fujifilm import decode_fujifilm
+
+        fujifilm = {}
+
+        make_text = str(make or "").lower()
+
+        if "fujifilm" in make_text or "fuji" in make_text:
+            fujifilm = decode_fujifilm(
+                [
+                    record
+                    for record in records
+                    if record.get("section") == "MakerNote"
+                ]
+            )
+
+        if gps:
+            lat, lon = gps
+
+            location = {
+                "latitude": lat,
+                "longitude": lon,
+                "available": True,
+                "map_url": (
+                    "https://www.openstreetmap.org/"
+                    f"?mlat={lat}&mlon={lon}"
+                    f"#map=16/{lat}/{lon}"
+                ),
+            }
+        else:
+            location = {
+                "available": False,
+            }
+
+        return {
+            "file": {
+                **image_file_info(path, image),
+                "format": image_format,
+                "extension": path.suffix.lower().lstrip(".").upper(),
+            },
+            "camera": {
+                "manufacturer": safe_value(make),
+                "make": safe_value(make),
+                "model": safe_value(model),
+                "lens": safe_value(lens),
+                "software": safe_value(software),
+                "detected": bool(make or model),
+            },
+            "exposure": {
+                "shutter": format_exposure_time(exposure_time),
+                "aperture": format_aperture(aperture),
+                "iso": safe_value(iso),
+                "focal_length": (
+                    f"{numeric_value(focal_length):g} mm"
+                    if numeric_value(focal_length) is not None
+                    else None
+                ),
+                "flash": safe_value(flash),
+            },
+            "capture": {
+                "original": safe_value(date_original),
+                "date_time": safe_value(date_general),
+            },
+            "location": location,
+            "gps": {
+                "available": bool(gps),
+                "latitude": gps[0] if gps else None,
+                "longitude": gps[1] if gps else None,
+            },
+            "privacy": {
+                "items": privacy_items,
+                "count": len(privacy_items),
+            },
+            "identifiers": {
+                "camera_serial": safe_value(serial),
+                "lens_serial": safe_value(lens_serial),
+                "artist": safe_value(artist),
+                "copyright": safe_value(copyright_value),
+            },
+            "image": {
+                "width": width,
+                "height": height,
+                "dimensions": f"{width:,} × {height:,} px",
+                "mode": mode,
+                "orientation": safe_value(orientation),
+                "color_space": safe_value(color_space),
+            },
+            "fujifilm": fujifilm,
+            "metadata": records,
+            "metadata_count": len(records),
+        }
