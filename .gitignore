@@ -14,3 +14,24 @@ __pycache__/
 *.py[cod]
 *.pyo
 .venv/
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+
+# Personal/test photographs
+examples/*.jpg
+examples/*.JPG
+examples/*.jpeg
+examples/*.JPEG
+examples/*.png
+examples/*.PNG
+examples/*.heic
+examples/*.HEIC
+examples/*.heif
+examples/*.HEIF
