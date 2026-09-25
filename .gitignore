@@ -5,3 +5,12 @@ __pycache__/
 .DS_Store
 *.log
 .env
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
