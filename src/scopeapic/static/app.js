@@ -1,136 +1,1444 @@
-const $ = (id) =>
-    document.getElementById(id);
+const $ = (id) => document.getElementById(id);
 
-
-const dropZone = $("dropZone");
+const dropzone = $("dropzone");
 const fileInput = $("fileInput");
-const loading = $("loading");
+const uploadStatus = $("uploadStatus");
 const results = $("results");
+const chooseButton = document.querySelector(".choose-button");
 
-let currentMetadata = [];
-let currentFile = null;
+const ACCEPTED_EXTENSIONS = [
+    "jpg",
+    "jpeg",
+    "png",
+    "heic",
+    "heif"
+];
+
+const HEIC_TYPES = [
+    "image/heic",
+    "image/heif"
+];
+
+const REQUEST_TIMEOUT_MS = 30000;
+
+let currentData = null;
+let allMetadata = [];
+let previewUrl = null;
 
 
 /* =========================================================
-   UPLOAD
-========================================================= */
+   HELPERS
+   ========================================================= */
 
-dropZone.addEventListener(
-    "click",
-    () => fileInput.click()
-);
+function esc(value) {
+    if (value === null || value === undefined || value === "") {
+        return "—";
+    }
+
+    return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+}
 
 
-fileInput.addEventListener(
-    "change",
-    () => {
+function plainValue(value) {
+    if (value === null || value === undefined) {
+        return "";
+    }
 
-        const file =
-            fileInput.files[0];
+    if (typeof value === "object") {
+        return JSON.stringify(value);
+    }
 
-        if (file) {
-            analyzeFile(file);
+    return String(value);
+}
+
+
+function value(object, ...keys) {
+    if (!object || typeof object !== "object") {
+        return null;
+    }
+
+    for (const key of keys) {
+        if (
+            object[key] !== undefined &&
+            object[key] !== null &&
+            object[key] !== ""
+        ) {
+            return object[key];
         }
-
     }
-);
+
+    return null;
+}
 
 
-dropZone.addEventListener(
-    "dragover",
-    event => {
-
-        event.preventDefault();
-
-        dropZone.classList.add(
-            "active"
-        );
-
+function copyText(text, button = null) {
+    if (!text) {
+        return;
     }
-);
 
+    navigator.clipboard.writeText(String(text))
+        .then(() => {
+            if (!button) {
+                return;
+            }
 
-dropZone.addEventListener(
-    "dragleave",
-    () => {
+            const old = button.textContent;
+            button.textContent = "Copied";
 
-        dropZone.classList.remove(
-            "active"
-        );
-
-    }
-);
-
-
-dropZone.addEventListener(
-    "drop",
-    event => {
-
-        event.preventDefault();
-
-        dropZone.classList.remove(
-            "active"
-        );
-
-        const file =
-            event.dataTransfer.files[0];
-
-        if (file) {
-            analyzeFile(file);
-        }
-
-    }
-);
-
-
-$("analyzeAnother").addEventListener(
-    "click",
-    () => {
-
-        results.classList.add(
-            "hidden"
-        );
-
-        fileInput.value = "";
-
-        window.scrollTo({
-            top: 0,
-            behavior: "smooth"
+            setTimeout(() => {
+                button.textContent = old || "Copy";
+            }, 1200);
+        })
+        .catch(() => {
+            // Clipboard can be unavailable in some browser contexts.
         });
+}
 
+
+function makeRows(items) {
+    const valid = items.filter(
+        ([, value]) =>
+            value !== null &&
+            value !== undefined &&
+            value !== ""
+    );
+
+    if (!valid.length) {
+        return `<div class="device-empty">No information found.</div>`;
     }
-);
+
+    return `
+        <div class="metadata-content">
+            ${valid.map(([label, itemValue]) => `
+                <div class="data-row">
+                    <span class="data-label">${esc(label)}</span>
+                    <span class="data-value">${esc(itemValue)}</span>
+                </div>
+            `).join("")}
+        </div>
+    `;
+}
+
+
+function rowsAsText(title, items) {
+    return [
+        title,
+        ...items
+            .filter(([, v]) => v !== null && v !== undefined && v !== "")
+            .map(([label, v]) => `${label}: ${plainValue(v)}`)
+    ].join("\n");
+}
 
 
 /* =========================================================
-   ANALYSIS
-========================================================= */
+   DEVICE
+   ========================================================= */
 
-async function analyzeFile(file) {
+function renderDevice(data) {
 
-    currentFile = file;
+    const camera = data.camera || {};
 
-    loading.classList.remove(
-        "hidden"
+    const make = value(
+        camera,
+        "make",
+        "manufacturer",
+        "brand"
     );
 
-    results.classList.add(
-        "hidden"
+    const model = value(
+        camera,
+        "model",
+        "camera_model",
+        "device"
     );
 
-    const form =
-        new FormData();
-
-    form.append(
-        "file",
-        file
+    const lens = value(
+        camera,
+        "lens",
+        "lens_model"
     );
+
+    const software = value(
+        camera,
+        "software"
+    );
+
+    const content = $("deviceContent");
+    const copyButton = $("copyDevice");
+
+    if (!make && !model && !lens && !software) {
+
+        content.innerHTML = `
+            <div class="device-empty">
+                No camera or device information was found
+                in the image metadata.
+            </div>
+        `;
+
+        copyButton.hidden = true;
+        return;
+    }
+
+    content.innerHTML = `
+        ${make
+            ? `<div class="device-maker">${esc(make)}</div>`
+            : ""
+        }
+
+        <div class="device-model">
+            ${esc(model || "Unknown model")}
+        </div>
+
+        ${lens ? `
+            <div class="device-field">
+                <label>Lens</label>
+                <div class="device-field-value">
+                    ${esc(lens)}
+                </div>
+            </div>
+        ` : ""}
+
+        ${software ? `
+            <div class="device-field">
+                <label>Software</label>
+                <div class="device-field-value">
+                    ${esc(software)}
+                </div>
+            </div>
+        ` : ""}
+    `;
+
+    const copyLines = [];
+
+    if (make) {
+        copyLines.push(`Manufacturer: ${plainValue(make)}`);
+    }
+
+    if (model) {
+        copyLines.push(`Model: ${plainValue(model)}`);
+    }
+
+    if (lens) {
+        copyLines.push(`Lens: ${plainValue(lens)}`);
+    }
+
+    if (software) {
+        copyLines.push(`Software: ${plainValue(software)}`);
+    }
+
+    copyButton.dataset.copy = [
+        "Device",
+        ...copyLines
+    ].join("\n");
+
+    copyButton.hidden = false;
+}
+
+
+/* =========================================================
+   EXPOSURE
+   ========================================================= */
+
+function renderExposure(data) {
+
+    const e = data.exposure || {};
+
+    const items = [
+        [
+            "Shutter",
+            value(
+                e,
+                "shutter_speed",
+                "shutter",
+                "exposure_time"
+            )
+        ],
+        [
+            "Aperture",
+            value(
+                e,
+                "aperture",
+                "f_number",
+                "fnumber"
+            )
+        ],
+        [
+            "ISO",
+            value(
+                e,
+                "iso",
+                "sensitivity"
+            )
+        ],
+        [
+            "Focal length",
+            value(
+                e,
+                "focal_length",
+                "focal"
+            )
+        ],
+        [
+            "Flash",
+            value(e, "flash")
+        ],
+        [
+            "Exposure bias",
+            value(
+                e,
+                "exposure_bias",
+                "exposure_compensation"
+            )
+        ]
+    ];
+
+    $("exposureContent").innerHTML = makeRows(items);
+
+    return rowsAsText("Exposure", items);
+}
+
+
+/* =========================================================
+   CAPTURE
+   ========================================================= */
+
+function renderCapture(data) {
+
+    const capture = data.capture || {};
+
+    /*
+     * Keep date/time here only.
+     * Do NOT put software or privacy data in this section.
+     */
+
+    const original = value(
+        capture,
+        "original",
+        "date_time",
+        "datetime",
+        "captured_at"
+    );
+
+    const date = value(
+        capture,
+        "date"
+    );
+
+    const time = value(
+        capture,
+        "time"
+    );
+
+    const items = [
+        [
+            "Date & time",
+            original || (
+                date && time
+                    ? `${date} ${time}`
+                    : date || time
+            )
+        ],
+        [
+            "Original",
+            original && original !== (date || time)
+                ? original
+                : null
+        ],
+        [
+            "Orientation",
+            value(capture, "orientation")
+        ],
+        [
+            "Color space",
+            value(capture, "color_space")
+        ]
+    ];
+
+    $("captureContent").innerHTML = makeRows(items);
+
+    return rowsAsText("Capture", items);
+}
+
+
+/* =========================================================
+   FILE
+   ========================================================= */
+
+function renderFile(data) {
+
+    const f = data.file || {};
+    const image = data.image || {};
+
+    const width = value(image, "width");
+    const height = value(image, "height");
+
+    const items = [
+        [
+            "Filename",
+            value(f, "name", "filename")
+        ],
+        [
+            "Format",
+            value(f, "format", "mime_type", "type")
+        ],
+        [
+            "Size",
+            value(f, "size_human", "size")
+        ],
+        [
+            "Dimensions",
+            width && height
+                ? `${width} × ${height}`
+                : null
+        ],
+        [
+            "Megapixels",
+            value(image, "megapixels")
+        ]
+    ];
+
+    $("fileContent").innerHTML = makeRows(items);
+
+    return rowsAsText("File", items);
+}
+
+
+/* =========================================================
+   GPS
+   ========================================================= */
+
+function unwrapCoordinate(input) {
+
+    if (
+        input === null ||
+        input === undefined ||
+        input === ""
+    ) {
+        return null;
+    }
+
+    if (typeof input === "number") {
+        return Number.isFinite(input)
+            ? input
+            : null;
+    }
+
+    if (Array.isArray(input)) {
+
+        if (!input.length) {
+            return null;
+        }
+
+        if (
+            input.length === 1 &&
+            typeof input[0] === "object"
+        ) {
+            return unwrapCoordinate(input[0]);
+        }
+
+        const values = input
+            .map(unwrapCoordinate)
+            .filter(v => v !== null);
+
+        if (values.length === 1) {
+            return values[0];
+        }
+
+        if (values.length >= 3) {
+
+            const degrees = Number(values[0]);
+            const minutes = Number(values[1]);
+            const seconds = Number(values[2]);
+
+            if (
+                Number.isFinite(degrees) &&
+                Number.isFinite(minutes) &&
+                Number.isFinite(seconds)
+            ) {
+                return (
+                    Math.abs(degrees) +
+                    Math.abs(minutes) / 60 +
+                    Math.abs(seconds) / 3600
+                ) * (degrees < 0 ? -1 : 1);
+            }
+        }
+
+        return null;
+    }
+
+    if (typeof input === "object") {
+
+        const nested = [
+            "decimal",
+            "value",
+            "formatted",
+            "raw",
+            "description",
+            "coordinates"
+        ];
+
+        for (const key of nested) {
+
+            if (
+                input[key] !== undefined &&
+                input[key] !== null
+            ) {
+                const result = unwrapCoordinate(input[key]);
+
+                if (result !== null) {
+                    return result;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    const text = String(input).trim();
+
+    if (!text) {
+        return null;
+    }
+
+    const numeric = Number(text);
+
+    if (Number.isFinite(numeric)) {
+        return numeric;
+    }
+
+    const dms = text.match(
+        /(-?\d+(?:\.\d+)?)\D+(\d+(?:\.\d+)?)?\D*(\d+(?:\.\d+)?)?/i
+    );
+
+    if (dms) {
+
+        const degrees = Number(dms[1]);
+        const minutes = dms[2] ? Number(dms[2]) : 0;
+        const seconds = dms[3] ? Number(dms[3]) : 0;
+
+        if (Number.isFinite(degrees)) {
+            return (
+                Math.abs(degrees) +
+                minutes / 60 +
+                seconds / 3600
+            ) * (degrees < 0 ? -1 : 1);
+        }
+    }
+
+    return null;
+}
+
+
+function findCoordinate(objects, keys) {
+
+    for (const object of objects) {
+
+        if (!object || typeof object !== "object") {
+            continue;
+        }
+
+        for (const key of keys) {
+
+            if (
+                object[key] !== undefined &&
+                object[key] !== null
+            ) {
+                const result = unwrapCoordinate(object[key]);
+
+                if (result !== null) {
+                    return result;
+                }
+            }
+        }
+    }
+
+    return null;
+}
+
+
+function getGPS(data) {
+
+    const location = data.location || {};
+    const gps = data.gps || {};
+
+    const objects = [
+        location,
+        gps,
+        data
+    ];
+
+    let lat = findCoordinate(
+        objects,
+        [
+            "latitude",
+            "lat",
+            "gps_latitude",
+            "GPSLatitude",
+            "gps_lat",
+            "GPSLat",
+            "latitude_decimal"
+        ]
+    );
+
+    let lon = findCoordinate(
+        objects,
+        [
+            "longitude",
+            "lon",
+            "lng",
+            "gps_longitude",
+            "GPSLongitude",
+            "gps_lon",
+            "GPSLng",
+            "longitude_decimal"
+        ]
+    );
+
+    const coordinateArrays = [
+        location.coordinates,
+        gps.coordinates,
+        data.coordinates
+    ];
+
+    for (const coordinates of coordinateArrays) {
+
+        if (
+            Array.isArray(coordinates) &&
+            coordinates.length >= 2
+        ) {
+
+            const a = unwrapCoordinate(coordinates[0]);
+            const b = unwrapCoordinate(coordinates[1]);
+
+            if (
+                a !== null &&
+                b !== null
+            ) {
+                lat = a;
+                lon = b;
+                break;
+            }
+        }
+    }
+
+    const latRef = findCoordinate(
+        objects,
+        [
+            "latitude_ref",
+            "GPSLatitudeRef"
+        ]
+    );
+
+    const lonRef = findCoordinate(
+        objects,
+        [
+            "longitude_ref",
+            "GPSLongitudeRef"
+        ]
+    );
+
+    /*
+     * If the backend gives a positive coordinate plus a
+     * hemisphere reference, apply the correct sign.
+     */
+    if (
+        lat !== null &&
+        typeof latRef === "string" &&
+        latRef.toUpperCase() === "S"
+    ) {
+        lat = -Math.abs(lat);
+    }
+
+    if (
+        lon !== null &&
+        typeof lonRef === "string" &&
+        lonRef.toUpperCase() === "W"
+    ) {
+        lon = -Math.abs(lon);
+    }
+
+    if (
+        lat === null ||
+        lon === null ||
+        !Number.isFinite(Number(lat)) ||
+        !Number.isFinite(Number(lon))
+    ) {
+        return null;
+    }
+
+    lat = Number(lat);
+    lon = Number(lon);
+
+    /*
+     * Never display the broken 0,0 coordinate.
+     */
+    if (
+        Math.abs(lat) < 0.000001 &&
+        Math.abs(lon) < 0.000001
+    ) {
+        return null;
+    }
+
+    if (
+        lat < -90 ||
+        lat > 90 ||
+        lon < -180 ||
+        lon > 180
+    ) {
+        return null;
+    }
+
+    return {
+        latitude: lat,
+        longitude: lon
+    };
+}
+
+
+/* =========================================================
+   LOCATION
+   ========================================================= */
+
+function renderLocation(data) {
+
+    const gps = getGPS(data);
+    const content = $("locationContent");
+
+    if (!gps) {
+
+        content.innerHTML = `
+            <div class="location-message">
+                No valid GPS coordinates were found in the image metadata.
+            </div>
+        `;
+
+        $("copyLocation").dataset.copy = "";
+        return "";
+    }
+
+    const lat = gps.latitude;
+    const lon = gps.longitude;
+
+    const delta = 0.006;
+
+    const left = lon - delta;
+    const right = lon + delta;
+    const bottom = lat - delta;
+    const top = lat + delta;
+
+    const mapUrl =
+        "https://www.openstreetmap.org/export/embed.html" +
+        `?bbox=${encodeURIComponent(
+            `${left},${bottom},${right},${top}`
+        )}` +
+        "&layer=mapnik" +
+        `&marker=${encodeURIComponent(`${lat},${lon}`)}`;
+
+    const osmUrl =
+        `https://www.openstreetmap.org/?mlat=${encodeURIComponent(lat)}` +
+        `&mlon=${encodeURIComponent(lon)}` +
+        `#map=16/${encodeURIComponent(lat)}/${encodeURIComponent(lon)}`;
+
+    const googleUrl =
+        `https://www.google.com/maps/search/?api=1&query=` +
+        encodeURIComponent(`${lat},${lon}`);
+
+    const coordinateText =
+        `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+
+    content.innerHTML = `
+        <iframe
+            class="location-map"
+            loading="lazy"
+            title="Photo GPS location"
+            src="${mapUrl}">
+        </iframe>
+
+        <div class="location-bottom">
+
+            <span class="coordinates">
+                ${esc(coordinateText)}
+            </span>
+
+            <div class="location-links">
+
+                <a
+                    class="btn btn-outline"
+                    href="${osmUrl}"
+                    target="_blank"
+                    rel="noopener">
+                    OpenStreetMap ↗
+                </a>
+
+                <a
+                    class="btn btn-outline"
+                    href="${googleUrl}"
+                    target="_blank"
+                    rel="noopener">
+                    Google Maps ↗
+                </a>
+
+            </div>
+
+        </div>
+    `;
+
+    const copyTextValue =
+        `Location\nLatitude: ${lat.toFixed(6)}\nLongitude: ${lon.toFixed(6)}`;
+
+    $("copyLocation").dataset.copy = copyTextValue;
+
+    return copyTextValue;
+}
+
+
+/* =========================================================
+   PRIVACY
+   ========================================================= */
+
+function renderPrivacy(data) {
+
+    const p = data.privacy || {};
+
+    let items = [];
+
+    if (Array.isArray(p.items)) {
+        items = p.items;
+    } else if (Array.isArray(p.identifiers)) {
+        items = p.identifiers;
+    } else if (Array.isArray(p.detected)) {
+        items = p.detected;
+    } else if (Array.isArray(p.personal_data)) {
+        items = p.personal_data;
+    }
+
+    /*
+     * Convert backend privacy records into clean label/value pairs.
+     */
+    const clean = [];
+
+    for (const item of items) {
+
+        if (
+            item === null ||
+            item === undefined
+        ) {
+            continue;
+        }
+
+        if (typeof item === "object") {
+
+            const label =
+                item.label ||
+                item.name ||
+                item.type ||
+                "";
+
+            const itemValue =
+                item.value ??
+                item.formatted ??
+                item.raw ??
+                item.description ??
+                "";
+
+            if (
+                label &&
+                itemValue !== "" &&
+                itemValue !== null &&
+                itemValue !== undefined
+            ) {
+                clean.push([
+                    String(label),
+                    plainValue(itemValue)
+                ]);
+            } else if (itemValue !== "") {
+                clean.push([
+                    "Metadata",
+                    plainValue(itemValue)
+                ]);
+            }
+
+        } else {
+
+            const text = String(item);
+
+            const separator = text.indexOf(":");
+
+            if (separator > 0) {
+
+                clean.push([
+                    text.slice(0, separator).trim(),
+                    text.slice(separator + 1).trim()
+                ]);
+
+            } else {
+
+                clean.push([
+                    "Identifier",
+                    text
+                ]);
+            }
+        }
+    }
+
+
+    /*
+     * Some privacy-relevant information can also live in the
+     * identifiers object rather than privacy.items.
+     */
+    if (
+        data.identifiers &&
+        typeof data.identifiers === "object"
+    ) {
+
+        for (const [key, raw] of Object.entries(data.identifiers)) {
+
+            if (
+                raw === null ||
+                raw === undefined ||
+                raw === ""
+            ) {
+                continue;
+            }
+
+            const exists = clean.some(
+                ([label]) =>
+                    label.toLowerCase() === key.toLowerCase()
+            );
+
+            if (!exists) {
+                clean.push([
+                    key,
+                    plainValue(raw)
+                ]);
+            }
+        }
+    }
+
+
+    /*
+     * Add GPS to Privacy because GPS can reveal the location
+     * where the photograph was taken.
+     */
+    const gps = getGPS(data);
+
+    if (gps) {
+
+        const alreadyHasGPS = clean.some(
+            ([label]) =>
+                label.toLowerCase().includes("gps") ||
+                label.toLowerCase().includes("location")
+        );
+
+        if (!alreadyHasGPS) {
+            clean.push([
+                "GPS location",
+                `${gps.latitude.toFixed(6)}, ${gps.longitude.toFixed(6)}`
+            ]);
+        }
+    }
+
+
+    /*
+     * Remove things that should now live elsewhere.
+     *
+     * Software -> Device
+     * Date/time -> Capture
+     */
+    const filtered = clean.filter(([label]) => {
+
+        const key = label.toLowerCase();
+
+        return ![
+            "software",
+            "date",
+            "date & time",
+            "datetime",
+            "date time",
+            "capture date",
+            "capture time"
+        ].some(
+            forbidden => key === forbidden
+        );
+    });
+
+
+    /*
+     * De-duplicate exact label/value combinations.
+     */
+    const unique = [];
+    const seen = new Set();
+
+    for (const [label, itemValue] of filtered) {
+
+        const id =
+            `${label.toLowerCase()}|${itemValue}`;
+
+        if (seen.has(id)) {
+            continue;
+        }
+
+        seen.add(id);
+        unique.push([label, itemValue]);
+    }
+
+
+    const importantOrder = [
+        "author",
+        "artist",
+        "creator",
+        "copyright",
+        "camera serial",
+        "serial number",
+        "lens serial",
+        "owner",
+        "gps location",
+        "location"
+    ];
+
+    unique.sort((a, b) => {
+
+        const aIndex =
+            importantOrder.indexOf(a[0].toLowerCase());
+
+        const bIndex =
+            importantOrder.indexOf(b[0].toLowerCase());
+
+        if (aIndex === -1 && bIndex === -1) {
+            return 0;
+        }
+
+        if (aIndex === -1) {
+            return 1;
+        }
+
+        if (bIndex === -1) {
+            return -1;
+        }
+
+        return aIndex - bIndex;
+    });
+
+
+    const content = $("privacyContent");
+
+    if (!unique.length) {
+
+        content.innerHTML = `
+            <div class="privacy-empty">
+                No obvious privacy-sensitive identifiers were
+                detected in the organized metadata.
+                Check Raw metadata for the complete record.
+            </div>
+        `;
+
+        $("copyPrivacy").dataset.copy = "";
+        return "";
+    }
+
+
+    content.innerHTML = `
+        <div class="privacy-list">
+
+            ${unique.map(([label, itemValue]) => `
+                <div class="privacy-row">
+                    <span class="privacy-label">
+                        ${esc(label)}
+                    </span>
+
+                    <span class="privacy-value">
+                        ${esc(itemValue)}
+                    </span>
+                </div>
+            `).join("")}
+
+        </div>
+    `;
+
+
+    const copyValue = [
+        "Privacy-sensitive data",
+        ...unique.map(
+            ([label, itemValue]) =>
+                `${label}: ${itemValue}`
+        )
+    ].join("\n");
+
+    $("copyPrivacy").dataset.copy = copyValue;
+
+    return copyValue;
+}
+
+
+/* =========================================================
+   FUJIFILM
+   ========================================================= */
+
+function renderFuji(data) {
+
+    const f = data.fujifilm || {};
+
+    const source =
+        f.values ||
+        f.fields ||
+        f;
+
+    const values = [];
+
+    if (
+        !source ||
+        typeof source !== "object"
+    ) {
+        $("fujiContent").innerHTML = `
+            <div class="fuji-empty">
+                No Fujifilm-specific metadata was found.
+            </div>
+        `;
+
+        $("fujiSection").style.display = "none";
+        return "";
+    }
+
+
+    for (const [key, raw] of Object.entries(source)) {
+
+        if (
+            raw === null ||
+            raw === undefined ||
+            raw === ""
+        ) {
+            continue;
+        }
+
+        let itemValue = raw;
+
+        if (typeof raw === "object") {
+
+            itemValue =
+                raw.value ??
+                raw.description ??
+                raw.raw ??
+                "";
+
+            if (
+                raw.confidence &&
+                itemValue !== ""
+            ) {
+                itemValue =
+                    `${itemValue} · ${raw.confidence}`;
+            }
+        }
+
+        if (
+            itemValue === null ||
+            itemValue === undefined ||
+            itemValue === ""
+        ) {
+            continue;
+        }
+
+        values.push([
+            key.replaceAll("_", " "),
+            plainValue(itemValue)
+        ]);
+    }
+
+
+    if (!values.length) {
+
+        $("fujiSection").style.display = "none";
+        return "";
+    }
+
+
+    $("fujiSection").style.display = "";
+
+    $("fujiContent").innerHTML = `
+        <div class="fuji-grid">
+
+            ${values.slice(0, 24).map(([key, itemValue]) => `
+                <div class="fuji-value">
+                    <label>${esc(key)}</label>
+                    <span>${esc(itemValue)}</span>
+                </div>
+            `).join("")}
+
+        </div>
+    `;
+
+
+    const copyValue = rowsAsText(
+        "Fujifilm data",
+        values
+    );
+
+    $("copyFuji").dataset.copy = copyValue;
+
+    return copyValue;
+}
+
+
+/* =========================================================
+   RAW METADATA
+   ========================================================= */
+
+function renderRaw(data) {
+
+    const raw = data.metadata || {};
+
+    if (Array.isArray(raw)) {
+
+        allMetadata = raw.map((item, index) => ({
+            key:
+                item.key ||
+                item.name ||
+                `Record ${index + 1}`,
+
+            value:
+                item.value ??
+                item.formatted ??
+                item.raw ??
+                ""
+        }));
+
+    } else {
+
+        allMetadata = Object.entries(raw).map(
+            ([key, value]) => ({
+                key,
+                value
+            })
+        );
+    }
+
+
+    $("metadataCount").textContent =
+        `${allMetadata.length} records`;
+
+    $("metadataSearch").value = "";
+
+    drawRaw("");
+}
+
+
+function drawRaw(query) {
+
+    const q = String(query)
+        .toLowerCase()
+        .trim();
+
+    const html = allMetadata
+        .filter(item => {
+
+            const rawValue =
+                typeof item.value === "object"
+                    ? JSON.stringify(item.value)
+                    : String(item.value ?? "");
+
+            return (
+                `${item.key} ${rawValue}`
+                    .toLowerCase()
+                    .includes(q)
+            );
+        })
+        .map(item => {
+
+            const display =
+                typeof item.value === "object"
+                    ? JSON.stringify(item.value)
+                    : String(item.value ?? "");
+
+            return `
+                <div class="raw-row">
+                    <b>${esc(item.key)}</b>
+                    <span>${esc(display)}</span>
+                </div>
+            `;
+        })
+        .join("");
+
+
+    $("rawMetadata").innerHTML =
+        html ||
+        `
+            <div class="raw-row">
+                <span>No matching metadata.</span>
+            </div>
+        `;
+}
+
+
+/* =========================================================
+   RESULTS
+   ========================================================= */
+
+function renderResults(data) {
+
+    currentData = data;
+
+    renderDevice(data);
+
+    const exposureText =
+        renderExposure(data);
+
+    const captureText =
+        renderCapture(data);
+
+    const fileText =
+        renderFile(data);
+
+    const locationText =
+        renderLocation(data);
+
+    const privacyText =
+        renderPrivacy(data);
+
+    const fujiText =
+        renderFuji(data);
+
+    document
+        .querySelector('[data-copy-section="exposure"]')
+        .dataset.copy = exposureText;
+
+    document
+        .querySelector('[data-copy-section="capture"]')
+        .dataset.copy = captureText;
+
+    document
+        .querySelector('[data-copy-section="file"]')
+        .dataset.copy = fileText;
+
+    renderRaw(data);
+}
+
+
+/* =========================================================
+   FILE / PREVIEW
+   ========================================================= */
+
+function isHeicFile(file) {
+
+    return (
+        HEIC_TYPES.includes(file.type) ||
+        /\.(heic|heif)$/i.test(file.name)
+    );
+}
+
+
+function hasAcceptedExtension(file) {
+
+    const extension =
+        file.name
+            .split(".")
+            .pop()
+            ?.toLowerCase();
+
+    return ACCEPTED_EXTENSIONS.includes(extension);
+}
+
+
+function setPreviewSrc(url) {
+
+    if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+    }
+
+    previewUrl = url;
+
+    $("preview").src = url;
+}
+
+
+function setBusy(busy) {
+
+    fileInput.disabled = busy;
+
+    chooseButton?.classList.toggle(
+        "disabled",
+        busy
+    );
+
+    dropzone.classList.toggle(
+        "busy",
+        busy
+    );
+}
+
+
+async function fetchWithTimeout(url, options) {
+
+    const controller =
+        new AbortController();
+
+    const timeout =
+        setTimeout(
+            () => controller.abort(),
+            REQUEST_TIMEOUT_MS
+        );
+
+    try {
+
+        return await fetch(
+            url,
+            {
+                ...options,
+                signal: controller.signal
+            }
+        );
+
+    } finally {
+
+        clearTimeout(timeout);
+    }
+}
+
+
+/* =========================================================
+   ANALYZE
+   ========================================================= */
+
+async function analyze(file) {
+
+    if (!file) {
+        return;
+    }
+
+    if (!hasAcceptedExtension(file)) {
+
+        uploadStatus.innerHTML = `
+            <span class="error">
+                ${esc(file.name)}
+                isn't supported. Use JPEG, PNG, HEIC or HEIF.
+            </span>
+        `;
+
+        return;
+    }
+
+
+    setBusy(true);
+
+    uploadStatus.innerHTML = `
+        <span class="spinner"></span>
+        Analyzing ${esc(file.name)}…
+    `;
 
 
     try {
 
+        const form =
+            new FormData();
+
+        form.append("file", file);
+
+
         const response =
-            await fetch(
+            await fetchWithTimeout(
                 "/api/analyze",
                 {
                     method: "POST",
@@ -142,9 +1450,9 @@ async function analyzeFile(file) {
         if (!response.ok) {
 
             throw new Error(
-                `Analysis failed (${response.status})`
+                await response.text() ||
+                `HTTP ${response.status}`
             );
-
         }
 
 
@@ -152,1545 +1460,397 @@ async function analyzeFile(file) {
             await response.json();
 
 
-        await renderReport(
-            data,
-            file
-        );
+        /*
+         * Normal browser-supported images can be shown directly
+         * from the selected local file.
+         */
+        if (!isHeicFile(file)) {
 
-
-    } catch (error) {
-
-        console.error(error);
-
-        alert(
-            "ScopeAPic could not analyze this image.\n\n" +
-            error.message
-        );
-
-    } finally {
-
-        loading.classList.add(
-            "hidden"
-        );
-
-    }
-
-}
-
-
-/* =========================================================
-   REPORT
-========================================================= */
-
-async function renderReport(
-    data,
-    file
-) {
-
-    currentMetadata =
-        data.metadata || [];
-
-
-    $("resultFilename")
-        .textContent =
-            data.file?.filename ||
-            file.name;
-
-
-    $("metadataCount")
-        .textContent =
-            data.metadata_count ||
-            currentMetadata.length ||
-            0;
-
-
-    await renderPreview(
-        data,
-        file
-    );
-
-
-    renderOverview(data);
-    renderCamera(data);
-    renderCapture(data);
-    renderLocation(data);
-    renderIdentifiers(data);
-    renderSettings(data);
-    renderFile(data);
-    renderPrivacy(data);
-    renderRawMetadata();
-
-
-    results.classList.remove(
-        "hidden"
-    );
-
-
-    results.scrollIntoView({
-        behavior: "smooth",
-        block: "start"
-    });
-
-}
-
-
-/* =========================================================
-   PREVIEW
-========================================================= */
-
-async function renderPreview(
-    data,
-    file
-) {
-
-    const type =
-        (
-            file.type ||
-            ""
-        ).toLowerCase();
-
-
-    const extension =
-        file.name
-            .split(".")
-            .pop()
-            .toLowerCase();
-
-
-    const isHEIC =
-        type.includes("heic") ||
-        type.includes("heif") ||
-        extension === "heic" ||
-        extension === "heif";
-
-
-    if (!isHEIC) {
-
-        $("previewImage").src =
-            URL.createObjectURL(
-                file
+            setPreviewSrc(
+                URL.createObjectURL(file)
             );
 
-        return;
-    }
-
-
-    /*
-       Browsers differ in HEIC support.
-
-       Ask ScopeAPic for a temporary JPEG
-       rendering of the analyzed original.
-    */
-
-    const form =
-        new FormData();
-
-    form.append(
-        "file",
-        file
-    );
-
-
-    const response =
-        await fetch(
-            "/api/preview",
-            {
-                method: "POST",
-                body: form
-            }
-        );
-
-
-    if (!response.ok) {
-
-        $("previewImage")
-            .removeAttribute("src");
-
-        return;
-    }
-
-
-    const blob =
-        await response.blob();
-
-
-    $("previewImage").src =
-        URL.createObjectURL(blob);
-
-}
-
-
-/* =========================================================
-   OVERVIEW
-========================================================= */
-
-function renderOverview(data) {
-
-    const file =
-        data.file || {};
-
-    const facts = [];
-
-
-    addFact(
-        facts,
-        "FORMAT",
-        file.format
-    );
-
-
-    if (
-        file.width &&
-        file.height
-    ) {
-
-        addFact(
-            facts,
-            "DIMENSIONS",
-            `${file.width} × ${file.height}`
-        );
-
-    }
-
-
-    if (file.megapixels) {
-
-        addFact(
-            facts,
-            "MEGAPIXELS",
-            `${file.megapixels} MP`
-        );
-
-    }
-
-
-    if (file.size_bytes) {
-
-        addFact(
-            facts,
-            "FILE SIZE",
-            formatBytes(
-                file.size_bytes
-            )
-        );
-
-    }
-
-
-    if (file.aspect_ratio) {
-
-        addFact(
-            facts,
-            "ASPECT",
-            file.aspect_ratio
-        );
-
-    }
-
-
-    $("overviewFacts").innerHTML =
-        facts.map(
-            ([label, value]) => `
-                <div>
-                    <span>
-                        ${escapeHtml(label)}
-                    </span>
-
-                    <strong>
-                        ${escapeHtml(value)}
-                    </strong>
-                </div>
-            `
-        ).join("");
-
-}
-
-
-/* =========================================================
-   CAMERA
-========================================================= */
-
-function renderCamera(data) {
-
-    const camera =
-        data.camera || {};
-
-    const exposure =
-        data.exposure || {};
-
-    const rows = [];
-
-
-    addRow(
-        rows,
-        "Manufacturer",
-        camera.make
-    );
-
-
-    addRow(
-        rows,
-        "Camera",
-        camera.model
-    );
-
-
-    addRow(
-        rows,
-        "Lens",
-        camera.lens
-    );
-
-
-    addRow(
-        rows,
-        "Lens manufacturer",
-        camera.lens_make
-    );
-
-
-    addRow(
-        rows,
-        "Focal length",
-        unit(
-            exposure.focal_length,
-            "mm"
-        )
-    );
-
-
-    addRow(
-        rows,
-        "35mm equivalent",
-        unit(
-            exposure.focal_length_35mm,
-            "mm"
-        )
-    );
-
-
-    $("cameraData").innerHTML =
-        rows.map(
-            renderRow
-        ).join("");
-
-}
-
-
-/* =========================================================
-   CAPTURE
-========================================================= */
-
-function renderCapture(data) {
-
-    const exposure =
-        data.exposure || {};
-
-    const capture =
-        data.capture || {};
-
-    const rows = [];
-
-
-    addRow(
-        rows,
-        "Date",
-        capture.date_time_original
-    );
-
-
-    addRow(
-        rows,
-        "Timezone",
-        capture.offset_time_original
-    );
-
-
-    addRow(
-        rows,
-        "Sub-second",
-        capture.subsec_time_original
-    );
-
-
-    addRow(
-        rows,
-        "Shutter",
-        exposure.shutter_speed
-    );
-
-
-    addRow(
-        rows,
-        "Aperture",
-        exposure.aperture
-    );
-
-
-    addRow(
-        rows,
-        "ISO",
-        exposure.iso
-    );
-
-
-    addRow(
-        rows,
-        "Exposure bias",
-        exposure.exposure_bias
-    );
-
-
-    addRow(
-        rows,
-        "Metering",
-        meteringName(
-            exposure.metering_mode
-        )
-    );
-
-
-    addRow(
-        rows,
-        "Flash",
-        flashName(
-            exposure.flash
-        )
-    );
-
-
-    $("captureData").innerHTML =
-        rows.map(
-            renderRow
-        ).join("");
-
-}
-
-
-/* =========================================================
-   LOCATION
-========================================================= */
-
-function renderLocation(data) {
-
-    const panel =
-        $("locationPanel");
-
-    const location =
-        data.location ||
-        data.gps;
-
-
-    if (
-        !location ||
-        location.latitude === undefined ||
-        location.longitude === undefined
-    ) {
-
-        panel.classList.add(
-            "hidden"
-        );
-
-        return;
-    }
-
-
-    const latitude =
-        Number(
-            location.latitude
-        );
-
-    const longitude =
-        Number(
-            location.longitude
-        );
-
-
-    if (
-        !Number.isFinite(latitude) ||
-        !Number.isFinite(longitude)
-    ) {
-
-        panel.classList.add(
-            "hidden"
-        );
-
-        return;
-    }
-
-
-    panel.classList.remove(
-        "hidden"
-    );
-
-
-    const rows = [];
-
-
-    addRow(
-        rows,
-        "Latitude",
-        formatCoordinate(
-            latitude,
-            "lat"
-        )
-    );
-
-
-    addRow(
-        rows,
-        "Longitude",
-        formatCoordinate(
-            longitude,
-            "lon"
-        )
-    );
-
-
-    if (
-        location.altitude !== null &&
-        location.altitude !== undefined
-    ) {
-
-        addRow(
-            rows,
-            "Altitude",
-            `${location.altitude} m`
-        );
-
-    }
-
-
-    if (
-        location.direction !== null &&
-        location.direction !== undefined
-    ) {
-
-        addRow(
-            rows,
-            "Image direction",
-            `${location.direction}°`
-        );
-
-    }
-
-
-    $("locationData").innerHTML =
-        rows.map(
-            renderRow
-        ).join("");
-
-
-    /*
-       OpenStreetMap map.
-
-       GPS is only sent to the map provider
-       when the user actually has GPS data.
-    */
-
-    const delta = 0.015;
-
-
-    $("mapFrame").src =
-        "https://www.openstreetmap.org/export/embed.html" +
-        `?bbox=${longitude - delta}%2C${latitude - delta}%2C` +
-        `${longitude + delta}%2C${latitude + delta}` +
-        `&layer=mapnik` +
-        `&marker=${latitude}%2C${longitude}`;
-
-}
-
-
-/* =========================================================
-   IDENTIFIERS
-========================================================= */
-
-function renderIdentifiers(data) {
-
-    const panel =
-        $("identifiersPanel");
-
-    const values = [];
-
-    const identifiers =
-        data.identifiers || {};
-
-
-    addIdentifier(
-        values,
-        "Camera serial",
-        identifiers.camera_serial
-    );
-
-
-    addIdentifier(
-        values,
-        "Lens serial",
-        identifiers.lens_serial
-    );
-
-
-    addIdentifier(
-        values,
-        "Author",
-        identifiers.artist
-    );
-
-
-    addIdentifier(
-        values,
-        "Copyright",
-        identifiers.copyright
-    );
-
-
-    addIdentifier(
-        values,
-        "Software",
-        data.camera?.software
-    );
-
-
-    if (!values.length) {
-
-        panel.classList.add(
-            "hidden"
-        );
-
-        return;
-    }
-
-
-    panel.classList.remove(
-        "hidden"
-    );
-
-
-    $("identifierData").innerHTML =
-        values.map(
-            item => `
-                <div class="identifier">
-
-                    <span>
-                        ${escapeHtml(item.label)}
-                    </span>
-
-                    <strong>
-                        ${escapeHtml(item.value)}
-                    </strong>
-
-                </div>
-            `
-        ).join("");
-
-}
-
-
-/* =========================================================
-   CAMERA SETTINGS
-========================================================= */
-
-function renderSettings(data) {
-
-    const panel =
-        $("settingsPanel");
-
-    const values = [];
-
-
-    const names = [
-        "WhiteBalance",
-        "FocusMode",
-        "AFMode",
-        "ShutterType",
-        "FilmMode",
-        "DynamicRange",
-        "DynamicRangeSetting",
-        "LensModulationOptimizer",
-        "GrainEffectRoughness",
-        "GrainEffectSize",
-        "ColorChromeEffect",
-        "ColorChromeFXBlue",
-        "ImageStabilization",
-        "Sharpness",
-        "Contrast",
-        "Saturation",
-        "NoiseReduction",
-        "HighISONoiseReduction",
-        "FlickerReduction",
-        "SceneRecognition",
-        "Macro",
-        "SlowSync"
-    ];
-
-
-    names.forEach(
-        name => {
-
-            const item =
-                findFujifilm(
-                    data,
-                    name
+        } else {
+
+            /*
+             * HEIC/HEIF gets converted through the existing
+             * local preview endpoint.
+             */
+            try {
+
+                const previewForm =
+                    new FormData();
+
+                previewForm.append(
+                    "file",
+                    file
                 );
 
 
-            if (
-                !item ||
-                item.interpreted_value === null ||
-                item.interpreted_value === undefined
-            ) {
-                return;
-            }
-
-
-            values.push({
-                label: pretty(name),
-
-                value:
-                    displayValue(
-                        item.interpreted_value
-                    ),
-
-                confidence:
-                    item.confidence
-            });
-
-        }
-    );
-
-
-    /*
-       Also add useful standard EXIF settings.
-    */
-
-    addSetting(
-        values,
-        "Exposure program",
-        exposureProgram(
-            data.exposure?.exposure_program
-        )
-    );
-
-
-    addSetting(
-        values,
-        "Exposure mode",
-        exposureMode(
-            data.exposure?.exposure_mode
-        )
-    );
-
-
-    addSetting(
-        values,
-        "Maximum aperture",
-        data.exposure?.max_aperture
-    );
-
-
-    if (!values.length) {
-
-        panel.classList.add(
-            "hidden"
-        );
-
-        return;
-    }
-
-
-    panel.classList.remove(
-        "hidden"
-    );
-
-
-    $("settingsData").innerHTML =
-        values.map(
-            item => `
-                <div class="setting">
-
-                    <span>
-                        ${escapeHtml(item.label)}
-                    </span>
-
-                    <strong>
-                        ${escapeHtml(item.value)}
-                    </strong>
-
-                    ${
-                        item.confidence
-                        ? `
-                            <small>
-                                ${escapeHtml(
-                                    item.confidence
-                                )}
-                            </small>
-                        `
-                        : ""
-                    }
-
-                </div>
-            `
-        ).join("");
-
-}
-
-
-/* =========================================================
-   FILE
-========================================================= */
-
-function renderFile(data) {
-
-    const panel =
-        $("filePanel");
-
-    const file =
-        data.file || {};
-
-    const values = [];
-
-
-    addSetting(
-        values,
-        "Filename",
-        file.filename
-    );
-
-
-    addSetting(
-        values,
-        "Format",
-        file.format
-    );
-
-
-    addSetting(
-        values,
-        "Dimensions",
-        file.width &&
-        file.height
-            ? `${file.width} × ${file.height}`
-            : null
-    );
-
-
-    addSetting(
-        values,
-        "Megapixels",
-        file.megapixels
-            ? `${file.megapixels} MP`
-            : null
-    );
-
-
-    addSetting(
-        values,
-        "File size",
-        file.size_bytes
-            ? formatBytes(
-                file.size_bytes
-            )
-            : null
-    );
-
-
-    addSetting(
-        values,
-        "Aspect ratio",
-        file.aspect_ratio
-    );
-
-
-    addSetting(
-        values,
-        "Color space",
-        colorSpace(
-            data.image?.color_space
-        )
-    );
-
-
-    addSetting(
-        values,
-        "Orientation",
-        orientation(
-            data.image?.orientation
-        )
-    );
-
-
-    addSetting(
-        values,
-        "Image mode",
-        file.mode
-    );
-
-
-    if (!values.length) {
-
-        panel.classList.add(
-            "hidden"
-        );
-
-        return;
-    }
-
-
-    panel.classList.remove(
-        "hidden"
-    );
-
-
-    $("fileData").innerHTML =
-        values.map(
-            item => `
-                <div class="setting">
-
-                    <span>
-                        ${escapeHtml(item.label)}
-                    </span>
-
-                    <strong>
-                        ${escapeHtml(item.value)}
-                    </strong>
-
-                </div>
-            `
-        ).join("");
-
-}
-
-
-/* =========================================================
-   PRIVACY
-========================================================= */
-
-function renderPrivacy(data) {
-
-    const panel =
-        $("privacyPanel");
-
-    const privacy =
-        data.privacy || {};
-
-
-    const checks = [
-        [
-            "GPS location",
-            privacy.gps_present
-        ],
-
-        [
-            "Camera serial number",
-            privacy.camera_serial_present
-        ],
-
-        [
-            "Lens serial number",
-            privacy.lens_serial_present
-        ],
-
-        [
-            "Author information",
-            privacy.artist_present
-        ],
-
-        [
-            "Copyright information",
-            privacy.copyright_present
-        ],
-
-        [
-            "Software information",
-            privacy.software_present
-        ]
-    ];
-
-
-    panel.classList.remove(
-        "hidden"
-    );
-
-
-    $("privacyData").innerHTML =
-        checks.map(
-            ([label, present]) => `
-
-                <div class="
-                    privacy-item
-                    ${present ? "warning" : "neutral"}
-                ">
-
-                    <span class="privacy-dot"></span>
-
-                    <div>
-
-                        <strong>
-                            ${escapeHtml(label)}
-                        </strong>
-
-                        <small>
-                            ${
-                                present
-                                ? "Detected"
-                                : "Not detected"
-                            }
-                        </small>
-
-                    </div>
-
-                </div>
-
-            `
-        ).join("");
-
-}
-
-
-/* =========================================================
-   RAW METADATA
-========================================================= */
-
-function renderRawMetadata() {
-
-    $("rawCount").textContent =
-        `${currentMetadata.length} fields`;
-
-
-    renderRawRows(
-        currentMetadata
-    );
-
-}
-
-
-function renderRawRows(
-    metadataList
-) {
-
-    $("rawRows").innerHTML =
-        metadataList.map(
-            item => {
-
-                const value =
-                    typeof item.value === "object"
-                    ? JSON.stringify(
-                        item.value
-                    )
-                    : String(
-                        item.value ?? ""
+                const previewResponse =
+                    await fetchWithTimeout(
+                        "/api/preview",
+                        {
+                            method: "POST",
+                            body: previewForm
+                        }
                     );
 
 
-                return `
-                    <div class="raw-row">
+                if (previewResponse.ok) {
 
-                        <span>
-                            ${escapeHtml(
-                                item.section || ""
-                            )}
-                        </span>
+                    const blob =
+                        await previewResponse.blob();
 
-                        <strong>
-                            ${escapeHtml(
-                                item.name || ""
-                            )}
-                        </strong>
+                    setPreviewSrc(
+                        URL.createObjectURL(blob)
+                    );
+                }
 
-                        <p>
-                            ${escapeHtml(value)}
-                        </p>
-
-                    </div>
-                `;
-
+            } catch {
+                // Analysis itself still succeeds if preview fails.
             }
-        ).join("");
+        }
 
+
+        const fileData =
+            data.file || {};
+
+        const image =
+            data.image || {};
+
+
+        const filename =
+            value(
+                fileData,
+                "name",
+                "filename"
+            ) || file.name;
+
+
+        $("photoName").textContent =
+            filename;
+
+        $("copyFilename").dataset.copy =
+            filename;
+
+
+        if (
+            image.width &&
+            image.height
+        ) {
+
+            $("photoDimensions").textContent =
+                `${image.width} × ${image.height}`;
+
+        } else {
+
+            $("photoDimensions").textContent =
+                "";
+        }
+
+
+        renderResults(data);
+
+
+        results.classList.remove(
+            "hidden"
+        );
+
+
+        uploadStatus.textContent = "";
+
+
+        results.scrollIntoView({
+            behavior: "smooth",
+            block: "start"
+        });
+
+    } catch (error) {
+
+        const message =
+            error.name === "AbortError"
+                ? "The request timed out. Try again."
+                : error.message;
+
+
+        uploadStatus.innerHTML = `
+            <span class="error">
+                Analysis failed: ${esc(message)}
+            </span>
+        `;
+
+    } finally {
+
+        setBusy(false);
+    }
 }
 
 
-$("rawToggle").addEventListener(
-    "click",
+/* =========================================================
+   UPLOAD EVENTS
+   ========================================================= */
+
+fileInput.addEventListener(
+    "change",
     () => {
-
-        $("rawMetadata")
-            .classList.toggle(
-                "hidden"
-            );
-
+        analyze(fileInput.files[0]);
     }
 );
 
 
-$("rawSearch").addEventListener(
-    "input",
+["dragenter", "dragover"].forEach(
+    eventName => {
+
+        dropzone.addEventListener(
+            eventName,
+            event => {
+
+                event.preventDefault();
+
+                dropzone.classList.add(
+                    "dragging"
+                );
+            }
+        );
+    }
+);
+
+
+["dragleave", "drop"].forEach(
+    eventName => {
+
+        dropzone.addEventListener(
+            eventName,
+            event => {
+
+                event.preventDefault();
+
+                dropzone.classList.remove(
+                    "dragging"
+                );
+            }
+        );
+    }
+);
+
+
+dropzone.addEventListener(
+    "drop",
     event => {
 
-        const query =
-            event.target.value
-                .trim()
-                .toLowerCase();
+        const file =
+            event.dataTransfer.files[0];
+
+        if (file) {
+            analyze(file);
+        }
+    }
+);
 
 
-        if (!query) {
+dropzone.addEventListener(
+    "click",
+    event => {
 
-            renderRawRows(
-                currentMetadata
-            );
-
+        if (
+            event.target.closest(
+                ".choose-button"
+            )
+        ) {
             return;
         }
 
-
-        const filtered =
-            currentMetadata.filter(
-                item =>
-                    JSON.stringify(item)
-                        .toLowerCase()
-                        .includes(query)
-            );
+        fileInput.click();
+    }
+);
 
 
-        renderRawRows(
-            filtered
+dropzone.addEventListener(
+    "keydown",
+    event => {
+
+        if (
+            event.key === "Enter" ||
+            event.key === " "
+        ) {
+
+            event.preventDefault();
+
+            fileInput.click();
+        }
+    }
+);
+
+
+["dragover", "drop"].forEach(
+    eventName => {
+
+        window.addEventListener(
+            eventName,
+            event => {
+                event.preventDefault();
+            }
         );
-
     }
 );
 
 
 /* =========================================================
-   HELPERS
-========================================================= */
+   COPY EVENTS
+   ========================================================= */
 
-function addRow(
-    rows,
-    label,
-    value
-) {
+document.addEventListener(
+    "click",
+    event => {
 
-    if (
-        value === null ||
-        value === undefined ||
-        value === ""
-    ) {
-        return;
-    }
-
-
-    rows.push({
-        label,
-        value:
-            displayValue(value)
-    });
-
-}
-
-
-function addFact(
-    facts,
-    label,
-    value
-) {
-
-    if (
-        value === null ||
-        value === undefined ||
-        value === ""
-    ) {
-        return;
-    }
-
-
-    facts.push([
-        label,
-        displayValue(value)
-    ]);
-
-}
-
-
-function addIdentifier(
-    values,
-    label,
-    value
-) {
-
-    if (
-        value === null ||
-        value === undefined ||
-        value === ""
-    ) {
-        return;
-    }
-
-
-    values.push({
-        label,
-        value:
-            displayValue(value)
-    });
-
-}
-
-
-function addSetting(
-    values,
-    label,
-    value
-) {
-
-    if (
-        value === null ||
-        value === undefined ||
-        value === ""
-    ) {
-        return;
-    }
-
-
-    values.push({
-        label,
-        value:
-            displayValue(value)
-    });
-
-}
-
-
-function renderRow(row) {
-
-    return `
-        <div class="intel-row">
-
-            <span>
-                ${escapeHtml(
-                    row.label
-                )}
-            </span>
-
-            <strong>
-                ${escapeHtml(
-                    row.value
-                )}
-            </strong>
-
-        </div>
-    `;
-
-}
-
-
-function metadata(
-    data,
-    name
-) {
-
-    const item =
-        (data.metadata || [])
-            .find(
-                entry =>
-                    entry.name === name
+        const button =
+            event.target.closest(
+                ".copy-btn"
             );
 
-
-    return item
-        ? item.value
-        : null;
-
-}
-
-
-function findFujifilm(
-    data,
-    name
-) {
-
-    return (
-        data.fujifilm?.metadata || []
-    ).find(
-        item =>
-            item.name === name
-    );
-
-}
-
-
-function displayValue(value) {
-
-    if (
-        value === null ||
-        value === undefined
-    ) {
-        return "";
-    }
-
-
-    if (
-        typeof value === "object"
-    ) {
-
-        if (
-            value.description
-        ) {
-            return String(
-                value.description
-            );
+        if (!button) {
+            return;
         }
 
+        const text =
+            button.dataset.copy;
 
-        return JSON.stringify(
-            value
+        if (!text) {
+            return;
+        }
+
+        copyText(
+            text,
+            button
+        );
+    }
+);
+
+
+$("copyAllJson").addEventListener(
+    "click",
+    () => {
+
+        if (!currentData) {
+            return;
+        }
+
+        copyText(
+            JSON.stringify(
+                currentData,
+                null,
+                2
+            ),
+            $("copyAllJson")
+        );
+    }
+);
+
+
+/* =========================================================
+   RAW SEARCH
+   ========================================================= */
+
+$("metadataSearch").addEventListener(
+    "input",
+    event => {
+        drawRaw(event.target.value);
+    }
+);
+
+
+/* =========================================================
+   NEW PHOTO
+   ========================================================= */
+
+$("newPhoto").addEventListener(
+    "click",
+    () => {
+
+        results.classList.add(
+            "hidden"
         );
 
-    }
+        fileInput.value = "";
 
+        uploadStatus.textContent = "";
 
-    return String(value);
+        if (previewUrl) {
+            URL.revokeObjectURL(
+                previewUrl
+            );
+            previewUrl = null;
+        }
 
-}
-
-
-function unit(
-    value,
-    suffix
-) {
-
-    if (
-        value === null ||
-        value === undefined ||
-        value === ""
-    ) {
-        return null;
-    }
-
-
-    return `${value} ${suffix}`;
-
-}
-
-
-function pretty(value) {
-
-    return String(value)
-        .replace(
-            /([a-z])([A-Z])/g,
-            "$1 $2"
-        )
-        .replaceAll(
-            "_",
-            " "
+        $("preview").removeAttribute(
+            "src"
         );
 
-}
-
-
-function formatCoordinate(
-    value,
-    type
-) {
-
-    const direction =
-        type === "lat"
-            ? value >= 0
-                ? "N"
-                : "S"
-            : value >= 0
-                ? "E"
-                : "W";
-
-
-    return `${Math.abs(value).toFixed(6)}° ${direction}`;
-
-}
-
-
-function orientation(value) {
-
-    const number =
-        Number(value);
-
-
-    const names = {
-        1: "Normal",
-        2: "Mirrored horizontal",
-        3: "Rotated 180°",
-        4: "Mirrored vertical",
-        5: "Mirrored + 90°",
-        6: "Rotated 90°",
-        7: "Mirrored + 270°",
-        8: "Rotated 270°"
-    };
-
-
-    return names[number] ||
-        displayValue(value);
-
-}
-
-
-function colorSpace(value) {
-
-    const number =
-        Number(value);
-
-
-    const names = {
-        1: "sRGB",
-        2: "Adobe RGB"
-    };
-
-
-    return names[number] ||
-        displayValue(value);
-
-}
-
-
-function meteringName(value) {
-
-    const names = {
-        0: "Unknown",
-        1: "Average",
-        2: "Center-weighted",
-        3: "Spot",
-        4: "Multi-spot",
-        5: "Pattern",
-        6: "Partial"
-    };
-
-
-    return names[Number(value)] ||
-        displayValue(value);
-
-}
-
-
-function flashName(value) {
-
-    if (
-        value === null ||
-        value === undefined
-    ) {
-        return null;
+        window.scrollTo({
+            top: 0,
+            behavior: "smooth"
+        });
     }
+);
 
 
-    const number =
-        Number(value);
+/* =========================================================
+   TABS
+   ========================================================= */
+
+const navTabs =
+    document.querySelectorAll(
+        ".nav-tab"
+    );
+
+const tabPanels =
+    document.querySelectorAll(
+        ".tab-panel"
+    );
 
 
-    if (number === 0) {
-        return "No flash";
-    }
+function setTab(name) {
 
+    navTabs.forEach(button => {
 
-    return `Flash data (${number})`;
+        const active =
+            button.dataset.tab === name;
 
-}
-
-
-function exposureProgram(value) {
-
-    const names = {
-        0: "Not defined",
-        1: "Manual",
-        2: "Program AE",
-        3: "Aperture priority",
-        4: "Shutter priority",
-        5: "Creative",
-        6: "Action",
-        7: "Portrait",
-        8: "Landscape"
-    };
-
-
-    return names[Number(value)] ||
-        displayValue(value);
-
-}
-
-
-function exposureMode(value) {
-
-    const names = {
-        0: "Auto",
-        1: "Manual",
-        2: "Auto bracket"
-    };
-
-
-    return names[Number(value)] ||
-        displayValue(value);
-
-}
-
-
-function formatBytes(bytes) {
-
-    const number =
-        Number(bytes);
-
-
-    if (
-        !Number.isFinite(number)
-    ) {
-        return String(bytes);
-    }
-
-
-    if (number < 1024)
-        return `${number} B`;
-
-
-    if (
-        number <
-        1024 ** 2
-    )
-        return `${(
-            number / 1024
-        ).toFixed(1)} KB`;
-
-
-    if (
-        number <
-        1024 ** 3
-    )
-        return `${(
-            number / 1024 ** 2
-        ).toFixed(2)} MB`;
-
-
-    return `${(
-        number / 1024 ** 3
-    ).toFixed(2)} GB`;
-
-}
-
-
-function escapeHtml(value) {
-
-    return String(value)
-        .replaceAll(
-            "&",
-            "&amp;"
-        )
-        .replaceAll(
-            "<",
-            "&lt;"
-        )
-        .replaceAll(
-            ">",
-            "&gt;"
-        )
-        .replaceAll(
-            '"',
-            "&quot;"
-        )
-        .replaceAll(
-            "'",
-            "&#039;"
+        button.classList.toggle(
+            "active",
+            active
         );
 
+        button.setAttribute(
+            "aria-pressed",
+            String(active)
+        );
+    });
+
+
+    tabPanels.forEach(panel => {
+
+        panel.hidden =
+            panel.dataset.tabPanel !== name;
+    });
+
+
+    window.scrollTo({
+        top: 0,
+        behavior: "smooth"
+    });
 }
+
+
+navTabs.forEach(button => {
+
+    button.addEventListener(
+        "click",
+        () => {
+            setTab(
+                button.dataset.tab
+            );
+        }
+    );
+});

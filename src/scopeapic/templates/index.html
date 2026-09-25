@@ -1,719 +1,422 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
-
     <meta charset="UTF-8">
-
-    <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1.0"
-    >
-
-    <title>ScopeAPic — Photo Intelligence</title>
-
-    <meta
-        name="description"
-        content="ScopeAPic extracts technical, geographic, device and provenance information from photographs."
-    >
-
-    <link
-        rel="icon"
-        type="image/svg+xml"
-        href="/static/favicon.svg"
-    >
-
-    <link
-        rel="stylesheet"
-        href="/static/style.css"
-    >
-
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#07080a">
+    <title>ScopeAPic — Photo Metadata</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/style.css">
 </head>
-
 
 <body>
 
-<header class="header">
-
-    <a
-        class="brand"
-        href="/"
-    >
-
-        <span class="brand-symbol">
-            S
-        </span>
-
-        <span>
+<header class="topbar">
+    <a class="brand" href="/">
+        <span class="brand-mark">S</span>
+        <span class="brand-text">
             <strong>ScopeAPic</strong>
-            <small>PHOTO INTELLIGENCE</small>
+            <small>PHOTO METADATA</small>
         </span>
-
     </a>
 
-
-    <nav>
-
-        <a href="#analyze">
+    <nav class="nav">
+        <button class="nav-tab active" type="button" data-tab="analyze" aria-pressed="true">
             Analyze
-        </a>
-
-        <a href="#capabilities">
-            Capabilities
-        </a>
-
-        <a href="#about">
+        </button>
+        <button class="nav-tab" type="button" data-tab="about" aria-pressed="false">
             About
+        </button>
+        <a href="https://github.com/La3003rS/ScopeAPic"
+           target="_blank"
+           rel="noopener">
+            GitHub ↗
         </a>
-
     </nav>
 
-
     <div class="local-status">
-
-        <i></i>
-
-        LOCAL ANALYSIS
-
+        <span></span>
+        Local
     </div>
-
 </header>
 
 
 <main>
 
+    <!-- ========================================================= -->
+    <!-- ANALYZE -->
+    <!-- ========================================================= -->
 
-<section
-    class="hero"
-    id="analyze"
->
+    <section class="tab-panel" data-tab-panel="analyze">
 
-    <div class="eyebrow">
-        DIGITAL PHOTO INTELLIGENCE
-    </div>
-
-
-    <h1>
-        Investigate<br>
-        <em>the photograph.</em>
-    </h1>
-
-
-    <p class="hero-description">
-        Extract the technical, geographic, device and
-        provenance information hidden inside an image.
-    </p>
-
-
-    <div
-        class="dropzone"
-        id="dropZone"
-    >
-
-        <div class="drop-icon">
-            +
-        </div>
-
-
-        <strong>
-            Drop an image to begin
-        </strong>
-
-
-        <span>
-            or
-            <label for="fileInput">
-                choose a file
-            </label>
-        </span>
-
-
-        <small>
-            JPEG · JPG · HEIC · HEIF · PNG · TIFF · WEBP
-        </small>
-
-
-        <input
-            id="fileInput"
-            type="file"
-            accept="image/*,.heic,.heif,.tif,.tiff,.webp"
-            hidden
-        >
-
-    </div>
-
-
-    <div
-        class="loading hidden"
-        id="loading"
-    >
-
-        <div class="loader"></div>
-
-        <span>
-            Building intelligence report…
-        </span>
-
-    </div>
-
-</section>
-
-
-
-<section
-    class="report hidden"
-    id="results"
->
-
-
-    <div class="report-header">
-
-        <div>
-
-            <div class="eyebrow">
-                INTELLIGENCE REPORT
+        <section class="hero">
+            <div>
+                <span class="eyebrow">PHOTO ANALYSIS</span>
+                <h1>See what's inside<br><strong>your photos.</strong></h1>
+                <p>
+                    Extract camera, lens, exposure, location, file and
+                    privacy-relevant metadata directly from your image.
+                </p>
             </div>
 
-            <h2 id="resultFilename">
-                —
-            </h2>
-
-        </div>
-
-
-        <button id="analyzeAnother">
-            NEW ANALYSIS
-        </button>
-
-    </div>
+            <div class="hero-facts">
+                <span>Camera</span>
+                <span>Exposure</span>
+                <span>GPS</span>
+                <span>Privacy</span>
+            </div>
+        </section>
 
 
+        <!-- Upload -->
 
-    <section class="overview">
+        <section class="upload-section">
+            <div id="dropzone"
+                 class="dropzone"
+                 tabindex="0"
+                 role="button"
+                 aria-label="Choose a photo">
 
-        <div class="preview">
+                <div class="upload-symbol">↑</div>
 
-            <img
-                id="previewImage"
-                alt="Analyzed photograph"
-            >
+                <div class="upload-copy">
+                    <strong>Drop a photo here</strong>
+                    <span>JPEG, PNG, HEIC or HEIF</span>
+                </div>
 
-        </div>
+                <label class="btn btn-primary choose-button">
+                    Choose photo
+                    <input
+                        id="fileInput"
+                        type="file"
+                        accept="image/jpeg,image/png,image/heic,image/heif,.jpg,.jpeg,.png,.heic,.heif"
+                        hidden>
+                </label>
+            </div>
 
-
-        <div class="overview-content">
-
-            <span class="label">
-                METADATA EXTRACTED
-            </span>
-
-
-            <strong
-                class="metadata-number"
-                id="metadataCount"
-            >
-                0
-            </strong>
-
-
-            <span class="muted">
-                metadata records
-            </span>
+            <div id="uploadStatus"
+                 class="upload-status"
+                 role="status"
+                 aria-live="polite"></div>
+        </section>
 
 
-            <div
-                class="overview-facts"
-                id="overviewFacts"
-            ></div>
+        <!-- Results -->
 
-        </div>
+        <section id="results" class="results hidden">
+
+            <div class="results-header">
+                <div>
+                    <span class="eyebrow">ANALYSIS RESULT</span>
+                    <h2>Image intelligence</h2>
+                </div>
+
+                <button id="newPhoto"
+                        type="button"
+                        class="btn btn-outline">
+                    Analyze another
+                </button>
+            </div>
+
+
+            <!-- Photo + Device -->
+
+            <div class="top-results">
+
+                <article class="panel photo-panel">
+                    <div class="panel-header">
+                        <div>
+                            <span class="panel-label">PHOTO</span>
+                            <h3>Preview</h3>
+                        </div>
+
+                        <span id="photoDimensions"
+                              class="small-value">—</span>
+                    </div>
+
+                    <div class="photo-wrap">
+                        <img id="preview"
+                             alt="Analyzed photograph">
+                    </div>
+
+                    <div class="photo-footer">
+                        <span id="photoName"
+                              class="filename">—</span>
+
+                        <button id="copyFilename"
+                                type="button"
+                                class="copy-btn"
+                                aria-label="Copy filename">
+                            Copy
+                        </button>
+                    </div>
+                </article>
+
+
+                <article class="panel device-panel">
+                    <div class="panel-header">
+                        <div>
+                            <span class="panel-label">DEVICE</span>
+                            <h3>Camera / device</h3>
+                        </div>
+
+                        <button id="copyDevice"
+                                type="button"
+                                class="copy-btn copy-btn-labeled"
+                                hidden>
+                            Copy
+                        </button>
+                    </div>
+
+                    <div id="deviceContent"></div>
+                </article>
+
+            </div>
+
+
+            <!-- Main metadata -->
+
+            <div class="metadata-grid">
+
+                <article id="exposureSection"
+                         class="panel metadata-panel">
+                    <div class="panel-header">
+                        <div>
+                            <span class="panel-label">CAPTURE</span>
+                            <h3>Exposure</h3>
+                        </div>
+                        <button class="copy-btn"
+                                type="button"
+                                data-copy-section="exposure">
+                            Copy
+                        </button>
+                    </div>
+                    <div id="exposureContent"></div>
+                </article>
+
+
+                <article id="captureSection"
+                         class="panel metadata-panel">
+                    <div class="panel-header">
+                        <div>
+                            <span class="panel-label">TIME</span>
+                            <h3>Capture</h3>
+                        </div>
+                        <button class="copy-btn"
+                                type="button"
+                                data-copy-section="capture">
+                            Copy
+                        </button>
+                    </div>
+                    <div id="captureContent"></div>
+                </article>
+
+
+                <article id="fileSection"
+                         class="panel metadata-panel">
+                    <div class="panel-header">
+                        <div>
+                            <span class="panel-label">FILE</span>
+                            <h3>File</h3>
+                        </div>
+                        <button class="copy-btn"
+                                type="button"
+                                data-copy-section="file">
+                            Copy
+                        </button>
+                    </div>
+                    <div id="fileContent"></div>
+                </article>
+
+            </div>
+
+
+            <!-- Location -->
+
+            <article id="locationSection"
+                     class="panel location-panel">
+
+                <div class="panel-header">
+                    <div>
+                        <span class="panel-label">GPS</span>
+                        <h3>Location</h3>
+                    </div>
+
+                    <button id="copyLocation"
+                            type="button"
+                            class="copy-btn">
+                        Copy
+                    </button>
+                </div>
+
+                <div id="locationContent"></div>
+            </article>
+
+
+            <!-- Privacy + Fujifilm -->
+
+            <div class="bottom-grid">
+
+                <article id="privacySection"
+                         class="panel metadata-panel">
+
+                    <div class="panel-header">
+                        <div>
+                            <span class="panel-label">PRIVACY</span>
+                            <h3>Privacy-sensitive data</h3>
+                        </div>
+
+                        <button id="copyPrivacy"
+                                type="button"
+                                class="copy-btn">
+                            Copy
+                        </button>
+                    </div>
+
+                    <div id="privacyContent"></div>
+                </article>
+
+
+                <article id="fujiSection"
+                         class="panel metadata-panel">
+
+                    <div class="panel-header">
+                        <div>
+                            <span class="panel-label">MAKER DATA</span>
+                            <h3>Fujifilm</h3>
+                        </div>
+
+                        <button id="copyFuji"
+                                type="button"
+                                class="copy-btn">
+                            Copy
+                        </button>
+                    </div>
+
+                    <div id="fujiContent"></div>
+                </article>
+
+            </div>
+
+
+            <!-- Raw metadata -->
+
+            <details class="raw-panel panel">
+
+                <summary>
+                    <div>
+                        <span class="panel-label">RAW METADATA</span>
+                        <strong id="metadataCount">0 records</strong>
+                    </div>
+
+                    <span class="raw-toggle">+</span>
+                </summary>
+
+                <div class="raw-tools">
+
+                    <input
+                        id="metadataSearch"
+                        type="search"
+                        placeholder="Search metadata…"
+                        autocomplete="off">
+
+                    <button id="copyAllJson"
+                            type="button"
+                            class="btn btn-outline">
+                        Copy all as JSON
+                    </button>
+
+                </div>
+
+                <div id="rawMetadata"></div>
+
+            </details>
+
+        </section>
 
     </section>
 
 
+    <!-- ========================================================= -->
+    <!-- ABOUT -->
+    <!-- ========================================================= -->
 
-    <div class="primary-grid">
+    <section class="tab-panel about-panel"
+             data-tab-panel="about"
+             hidden>
+
+        <section class="about-hero">
+            <span class="eyebrow">ABOUT SCOPEAPIC</span>
+
+            <h1>
+                Useful information.<br>
+                Nothing unnecessary.
+            </h1>
+
+            <p>
+                ScopeAPic is a local-first photo metadata analysis tool.
+                It reads information stored inside your images and presents
+                the useful parts in a clear format.
+            </p>
+        </section>
 
 
-        <section class="panel">
+        <section class="about-grid">
 
-            <div class="panel-title">
-
-                <span>01</span>
-
-                <h3>
-                    Camera
-                </h3>
-
+            <div>
+                <span class="about-number">01</span>
+                <h3>Analyze locally</h3>
+                <p>
+                    Your image is processed by the ScopeAPic application
+                    running on your own machine.
+                </p>
             </div>
 
+            <div>
+                <span class="about-number">02</span>
+                <h3>See what was stored</h3>
+                <p>
+                    Camera, lens, exposure, dates, GPS information,
+                    identifiers and other metadata can be inspected.
+                </p>
+            </div>
 
-            <div
-                id="cameraData"
-                class="intelligence-list"
-            ></div>
+            <div>
+                <span class="about-number">03</span>
+                <h3>Keep the raw data</h3>
+                <p>
+                    The complete metadata block remains available below
+                    the organized information.
+                </p>
+            </div>
 
         </section>
 
 
-
-        <section class="panel">
-
-            <div class="panel-title">
-
-                <span>02</span>
-
-                <h3>
-                    Capture
-                </h3>
-
-            </div>
-
-
-            <div
-                id="captureData"
-                class="intelligence-list"
-            ></div>
-
-        </section>
-
-    </div>
-
-
-
-    <section
-        class="location-panel hidden"
-        id="locationPanel"
-    >
-
-        <div class="panel-title">
-
-            <span>03</span>
-
-            <h3>
-                Location intelligence
-            </h3>
-
-
-            <strong class="detected">
-                GPS DETECTED
-            </strong>
-
+        <div class="about-supported">
+            <span>SUPPORTED</span>
+            <strong>JPG · JPEG · PNG · HEIC · HEIF</strong>
         </div>
 
 
-        <div class="location-grid">
-
-
-            <div
-                class="location-details"
-                id="locationData"
-            ></div>
-
-
-            <div class="map-wrapper">
-
-                <iframe
-                    id="mapFrame"
-                    title="Photograph GPS location"
-                    loading="lazy"
-                    referrerpolicy="no-referrer-when-downgrade"
-                ></iframe>
-
-            </div>
-
-        </div>
+        <a class="btn btn-outline"
+           href="https://github.com/La3003rS/ScopeAPic"
+           target="_blank"
+           rel="noopener">
+            View ScopeAPic on GitHub ↗
+        </a>
 
     </section>
-
-
-
-    <section
-        class="panel section-gap hidden"
-        id="identifiersPanel"
-    >
-
-        <div class="panel-title">
-
-            <span>04</span>
-
-            <h3>
-                Device & identifiers
-            </h3>
-
-        </div>
-
-
-        <div
-            class="identifier-grid"
-            id="identifierData"
-        ></div>
-
-    </section>
-
-
-
-    <section
-        class="panel section-gap hidden"
-        id="settingsPanel"
-    >
-
-        <div class="panel-title">
-
-            <span>05</span>
-
-            <h3>
-                Camera settings
-            </h3>
-
-        </div>
-
-
-        <div
-            class="settings-grid"
-            id="settingsData"
-        ></div>
-
-    </section>
-
-
-
-    <section
-        class="panel section-gap hidden"
-        id="filePanel"
-    >
-
-        <div class="panel-title">
-
-            <span>06</span>
-
-            <h3>
-                File intelligence
-            </h3>
-
-        </div>
-
-
-        <div
-            class="settings-grid"
-            id="fileData"
-        ></div>
-
-    </section>
-
-
-
-    <section
-        class="panel section-gap hidden"
-        id="privacyPanel"
-    >
-
-        <div class="panel-title">
-
-            <span>07</span>
-
-            <h3>
-                Identifiers & privacy
-            </h3>
-
-        </div>
-
-
-        <div
-            class="privacy-grid"
-            id="privacyData"
-        ></div>
-
-    </section>
-
-
-
-    <section class="raw-section">
-
-
-        <button id="rawToggle">
-
-            <span>
-                RAW METADATA
-            </span>
-
-
-            <small id="rawCount">
-                0 fields
-            </small>
-
-
-            <b>
-                +
-            </b>
-
-        </button>
-
-
-        <div
-            id="rawMetadata"
-            class="raw-content hidden"
-        >
-
-            <div class="raw-search">
-
-                <input
-                    id="rawSearch"
-                    type="search"
-                    placeholder="Search metadata..."
-                >
-
-            </div>
-
-
-            <div id="rawRows"></div>
-
-        </div>
-
-    </section>
-
-</section>
-
-
-
-<section
-    class="capabilities"
-    id="capabilities"
->
-
-    <div class="eyebrow">
-        WHAT SCOPEAPIC EXTRACTS
-    </div>
-
-
-    <h2>
-        Information hidden<br>
-        inside the image.
-    </h2>
-
-
-    <div class="capability-grid">
-
-
-        <article>
-
-            <span>01</span>
-
-            <h3>
-                Device
-            </h3>
-
-            <p>
-                Camera body, lens, firmware, serial numbers
-                and manufacturer-specific information.
-            </p>
-
-        </article>
-
-
-        <article>
-
-            <span>02</span>
-
-            <h3>
-                Location
-            </h3>
-
-            <p>
-                GPS coordinates, altitude and direction
-                when geographic information is embedded.
-            </p>
-
-        </article>
-
-
-        <article>
-
-            <span>03</span>
-
-            <h3>
-                Capture
-            </h3>
-
-            <p>
-                Timestamp, timezone, exposure, focus,
-                orientation and camera settings.
-            </p>
-
-        </article>
-
-
-        <article>
-
-            <span>04</span>
-
-            <h3>
-                Provenance
-            </h3>
-
-            <p>
-                Software, author information, file properties,
-                thumbnails and embedded metadata.
-            </p>
-
-        </article>
-
-    </div>
-
-</section>
-
-
-
-<section
-    class="about"
-    id="about"
->
-
-    <div class="eyebrow">
-        ABOUT SCOPEAPIC
-    </div>
-
-
-    <h2>
-        Read what the<br>
-        image contains.
-    </h2>
-
-
-    <div class="about-content">
-
-        <p class="about-lead">
-            ScopeAPic is a local-first photo intelligence
-            tool built to make hidden image information
-            understandable.
-        </p>
-
-
-        <p>
-            A photograph can contain far more than the pixels
-            that appear on screen. Depending on the camera,
-            phone, application and export process, an image
-            may carry information about the device used to
-            create it, when it was captured, how it was
-            processed, where it was taken and who may have
-            authored it.
-        </p>
-
-
-        <p>
-            ScopeAPic brings those layers together in one
-            investigation-oriented report. Standard EXIF
-            metadata is combined with manufacturer-specific
-            information, such as Fujifilm MakerNotes, and
-            presented in a way that separates directly
-            extracted information from interpreted values.
-        </p>
-
-
-        <p>
-            The application is designed to be useful for
-            photographers, researchers, journalists,
-            digital investigators and anyone who needs to
-            understand the information carried by an image.
-            It does not attempt to identify a person from
-            pixels or invent information that is not present
-            in the source file.
-        </p>
-
-
-        <p>
-            ScopeAPic is local-first: the original photograph
-            is analyzed by the application rather than being
-            uploaded to a remote analysis service. When a
-            geographic map is displayed, the mapping service
-            may receive the coordinates required to render
-            that map.
-        </p>
-
-
-        <div class="about-principles">
-
-            <div>
-                <strong>
-                    Extract
-                </strong>
-
-                <span>
-                    Preserve information recorded by the file.
-                </span>
-            </div>
-
-
-            <div>
-                <strong>
-                    Interpret
-                </strong>
-
-                <span>
-                    Explain manufacturer-specific information
-                    with confidence levels.
-                </span>
-            </div>
-
-
-            <div>
-                <strong>
-                    Distinguish
-                </strong>
-
-                <span>
-                    Keep extracted facts separate from
-                    calculated or interpreted values.
-                </span>
-            </div>
-
-
-            <div>
-                <strong>
-                    Preserve
-                </strong>
-
-                <span>
-                    Keep the complete raw metadata available
-                    for deeper inspection.
-                </span>
-            </div>
-
-        </div>
-
-    </div>
-
-</section>
 
 </main>
 
 
-
 <footer>
-
-    <span>
-        ScopeAPic · Photo Intelligence
-    </span>
-
-
-    <span>
-        Made by
-
-        <a
-            href="https://github.com/La3003rS"
-            target="_blank"
-            rel="noopener"
-        >
-            La3003rS
-        </a>
-    </span>
-
+    <span>ScopeAPic</span>
+    <span>Local-first · Open source</span>
 </footer>
 
 
-
 <script src="/static/app.js"></script>
-
 </body>
-
 </html>
